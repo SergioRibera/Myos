@@ -1,0 +1,12 @@
+{
+  "name": "Myos",
+  "description": {
+    "en": "Workout manager app",
+    "es": "Workout manager app"
+  },
+  "repo": "SergioRibera/myos",
+  "site": "https://myos.example.com",
+  "base": "/",
+  "ios": true,
+  "xcodeproj": "MyosApp"
+}

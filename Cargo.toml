@@ -1,0 +1,57 @@
+[package]
+name    = "myos"
+version = "0.1.0"
+edition = "2024"
+# wincode (the istmo wire codec) needs 1.89.
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+authors = ["Sergio Ribera <contact@sergioribera.rs>"]
+description = "Workout manager app"
+repository = "https://github.com/SergioRibera/myos"
+publish = false
+
+[lib]
+# cdylib: Android `.so`; staticlib: iOS `.a`; rlib: the desktop binary.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "myos"
+path = "src/main.rs"
+
+[dependencies]
+# `game-activity`: the Android host is `IstmoGameActivity`, a
+# `ComponentActivity`, so plugins whose backend needs the activity
+# (sign-in, share, file picker, …) work out of the box.
+istmo = { version = "0.1.1-alpha.6", default-features = false, features = ["game-activity"] }
+log   = "0.4"
+
+# Plugin crates. Their build scripts hand their manifest to `build.rs`,
+# so `istmo::runtime!()` wires the clients and the native projects get
+# the backends without further setup.
+istmo-share           = "0.1.1-alpha.6"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+
+[build-dependencies]
+# `istmo_build::emit()` reads `istmo.toml`, collects every plugin's
+# manifest and contract, and generates the Kotlin / Swift glue.
+istmo-build = "0.1.1-alpha.6"
+
+[lints.rust]
+# Toolchains older than clippy 1.100 do not know `unused_async_trait_impl`.
+unknown_lints = { level = "allow", priority = -2 }
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+# `#[istmo::mobile_app]` exports `#[unsafe(no_mangle)]` entry points.
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Plugin traits are async; sync backends implement them with `async fn`
+# rather than hand-built `std::future::ready` futures.
+unused_async_trait_impl = "allow"

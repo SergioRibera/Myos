@@ -1,0 +1,300 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (v0.1.0). Empty: build every artifact from the selected ref without publishing."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolves what is being built and fans the matrix out of nix/targets.nix
+  # (`nix run .#matrix`), so this workflow never lists platforms itself.
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.r.outputs.ref }}
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+      publish: ${{ steps.r.outputs.publish }}
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: r
+        name: resolve ref
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          raw="${INPUT_TAG:-}"
+          if [ -z "$raw" ] && [ "$GITHUB_REF_TYPE" = tag ]; then raw="$GITHUB_REF_NAME"; fi
+          if [ -n "$raw" ]; then
+            tag="v${raw#v}"
+            {
+              echo "ref=refs/tags/$tag"
+              echo "tag=$tag"
+              echo "version=${tag#v}"
+              echo "publish=true"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "ref=$GITHUB_SHA"
+              echo "publish=false"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.r.outputs.ref }}
+
+      - name: Cargo.toml version matches the tag
+        if: steps.r.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.r.outputs.version }}
+        run: |
+          crate=$(awk -F\" '/^version = /{print $2; exit}' Cargo.toml)
+          if [ "$crate" != "$VERSION" ]; then
+            echo "::error::Cargo.toml version ($crate) does not match tag ($VERSION)"
+            exit 1
+          fi
+
+      - uses: cachix/install-nix-action@v31
+
+      - id: m
+        name: matrix
+        run: |
+          matrix=$(nix run .#matrix --quiet)
+          echo "$matrix" | jq .
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    name: desktop (${{ matrix.system }})
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix).nix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: cachix/install-nix-action@v31
+      - name: bundles
+        run: nix build -L .#bundles -o result-bundles
+      - name: stage
+        run: bash .github/scripts/stage-bundles.sh result-bundles dist ${{ matrix.system }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.system }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Cross-built from Linux (nix/windows.nix), packaged by nix-bundle-app.
+  windows:
+    name: windows (${{ matrix.system }})
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix).cross }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: cachix/install-nix-action@v31
+      - name: bundles
+        run: nix build -L .#windows-bundles -o result-bundles
+      - name: stage
+        run: bash .github/scripts/stage-bundles.sh result-bundles dist ${{ matrix.system }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.system }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # One APK per ABI in nix/targets.nix plus a universal one. Signed when
+  # the ANDROID_KEYSTORE_B64 secret exists.
+  android:
+    name: android
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: actions/setup-java@v6
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 ndk;26.3.11579264'
+      - uses: gradle/actions/setup-gradle@v6
+        with: { gradle-version: '8.7' }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: 'aarch64-linux-android,x86_64-linux-android' }
+      - uses: Swatinem/rust-cache@v2
+
+      - name: release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$HOME/release.jks"
+            echo "ANDROID_RELEASE_KEYSTORE=$HOME/release.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no ANDROID_KEYSTORE_B64 secret: the release APKs are unsigned"
+          fi
+
+      - name: assemble release APKs
+        working-directory: android
+        run: gradle assembleRelease "-Pistmo.abis=${{ fromJSON(needs.plan.outputs.matrix).android.abis }}"
+        env:
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
+
+      - name: stage
+        env:
+          VERSION: ${{ needs.plan.outputs.version || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for apk in android/app/build/outputs/apk/release/app-*-release*.apk; do
+            variant=$(basename "$apk" .apk)
+            variant=${variant#app-}
+            variant=${variant%-release*}
+            cp "$apk" "dist/myos-${VERSION}-android-${variant}.apk"
+          done
+          ls -la dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish GitHub release
+    needs: [plan, desktop, windows, android]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: git-cliff needs the previous tag to cut the range.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      # This release's feat / fix / perf commits; a hand-written
+      # `release-notes/<tag>.md` replaces them.
+      - name: changes in this release
+        if: hashFiles(format('release-notes/{0}.md', needs.plan.outputs.tag)) == ''
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --current --strip header
+        env:
+          OUTPUT: CHANGES.md
+      - name: curated notes
+        if: hashFiles(format('release-notes/{0}.md', needs.plan.outputs.tag)) != ''
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: cp "release-notes/$TAG.md" CHANGES.md
+
+      # Update manifest (latest.json): every file with platform, arch, kind,
+      # size and sha256, for an in-app update check and the site.
+      - name: latest.json
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: bash .github/scripts/latest-manifest.sh dist "$TAG" CHANGES.md > dist/latest.json && jq '.assets |= length' dist/latest.json
+
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          find . -type f ! -name SHA256SUMS -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -- > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: release notes
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          {
+            cat CHANGES.md
+            cat <<EON
+
+          ## Install
+
+          - **Android**: \`myos-*-android-universal.apk\` works everywhere; the per-ABI APKs are smaller.
+          - **Linux**: AppImage, \`.deb\`, \`.rpm\` or \`.tar.gz\`.
+          - **macOS** (Apple silicon): \`.dmg\` or the zipped \`.app\`, unsigned: right-click the app and choose Open the first time.
+          - **Windows**: \`-setup.exe\` or \`.msi\`.
+          - **Nix**: \`nix run github:SergioRibera/myos/$TAG\`
+          EON
+          } > NOTES.md
+          cat NOTES.md
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.plan.outputs.tag }}
+          name: myos ${{ needs.plan.outputs.tag }}
+          prerelease: ${{ contains(needs.plan.outputs.tag, '-') }}
+          make_latest: ${{ !contains(needs.plan.outputs.tag, '-') }}
+          body_path: NOTES.md
+          fail_on_unmatched_files: true
+          files: dist/*
+
+  # Rebuilds the site with the release just published. Skipped until the
+  # CLOUDFLARE_API_TOKEN secret exists.
+  site:
+    name: site
+    needs: [plan, publish]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v7
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: pnpm/action-setup@v4
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        with:
+          node-version: 22
+      - name: build and deploy
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          pnpm install
+          pnpm run deploy
+

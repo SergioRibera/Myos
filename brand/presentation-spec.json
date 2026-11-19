@@ -1,0 +1,36 @@
+{
+  "brand": "Myos",
+  "tagline": "Tu entrenamiento, tu cuerpo y tu dieta, día a día",
+  "brief": "App personal (mobile + desktop) para registrar rutina, comidas y medidas y llevar control diario; traduce el entrenamiento a impacto por músculo. Debe sentirse fitness y humana, no una herramienta de datos.",
+  "adjectives": ["activa", "constante", "personal", "saludable"],
+  "criteria": "Éxito: se siente fitness sin clichés (mancuerna, brazo, rayo), reconocible a 16 px, funciona en una tinta, se integra en el nombre.",
+  "mockups": ["app-icon", "social", "website", "tshirt", "sticker", "tote"],
+  "nav": ["Cómo funciona", "Mapa muscular", "Descargar"],
+  "brand_color": "#15171C",
+  "greyscale": false,
+  "designer": "Myos",
+  "round": 3,
+  "concepts": [
+    {
+      "name": "Impulso",
+      "symbol": "svg/myos-symbol-color.svg",
+      "lockup": "svg/myos-wordmark-color.svg",
+      "symbol_on_tile": "svg/myos-symbol-reversed.svg",
+      "lockup_on_dark": "svg/myos-wordmark-reversed.svg",
+      "tile_color": "#15171C",
+      "idea": "La y de myos es una persona que se estira hacia arriba: el esfuerzo diario hecho letra.",
+      "rationale": [
+        "Fitness y humana sin caer en mancuernas ni brazos flexionados",
+        "Se integra en el nombre: símbolo y wordmark son la misma idea",
+        "Trazo redondeado único: cercana, constante, amable",
+        "Carbón + lima: energía deportiva con el lima solo en la marca, nunca de fondo"
+      ]
+    }
+  ],
+  "recommendation": "Impulso en Carbón + lima: la más humana y propia, y escala de 16 px a una remera.",
+  "next_steps": [
+    "Integrar íconos en android/ e ios/ del proyecto",
+    "Elegir tipografía de UI que acompañe el trazo redondeado",
+    "Búsqueda profesional de marca registrada"
+  ]
+}

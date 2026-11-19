@@ -1,0 +1,77 @@
+# App-side istmo.toml — the single source of truth for the app identity.
+# `build.rs` (`istmo_build::emit()`) reads it on every build, the
+# `io.github.sergioribera.istmo` Gradle plugin and the generated Xcode
+# settings apply it. A misspelled key fails the build.
+
+[app]
+id   = "rs.sergioribera.myos"            # applicationId + PRODUCT_BUNDLE_IDENTIFIER
+name = "Myos"         # launcher label / CFBundleDisplayName
+# build   = 1                     # versionCode / CFBundleVersion
+# version = "0.1.0"               # default: Cargo.toml `package.version`
+
+# Kotlin package of the generated code for the app's own and the
+# built-in contracts (plugin crates that declare `android_package`
+# generate into theirs). Default: the Gradle `namespace` + `.gen`.
+# android_package = "rs.sergioribera.myos.gen"
+# ios_app_dir     = "MyosApp"   # default: the single ios/* app dir
+# auto_register   = true          # false → empty IstmoPluginRegistry
+
+# Launcher icons, from the brand kit (`brand/`, rebuilt by
+# `brand/tools/build-kit.sh`). Lime never goes on a background.
+[app.icon]
+image   = "brand/app-icon/icon-1024.png"       # iOS app icon + legacy Android mipmaps
+desktop = "brand/app-icon/icon-tile-1024.png"  # window / .exe icon
+
+[app.icon.android]                             # adaptive icon (API 26+)
+foreground = "brand/app-icon/android/foreground.png"
+background = "#15171C"
+monochrome = "brand/app-icon/android/monochrome.png"
+
+# Info.plist entries on top of the ones plugins declare (e.g. a localised
+# usage description). They land between the `istmo:background` markers
+# of Info.plist.
+# [app.info_plist]
+# NSCameraUsageDescription = "Scan the QR code on your ticket."
+
+# File types the app opens: Android intent filters (between the
+# `istmo:documents` markers of AndroidManifest.xml), iOS document types.
+# [[app.document_type]]
+# name       = "PDF document"
+# id         = "com.adobe.pdf"
+# extensions = ["pdf"]
+# mime_types = ["application/pdf"]
+
+[min_versions]
+android = 26                      # minSdk
+ios     = "14.0"                  # IPHONEOS_DEPLOYMENT_TARGET
+
+# Per-plugin overrides. Default role is `host` (the native side implements
+# the backend); `client` generates a Kotlin / Swift client for a
+# Rust-hosted plugin. `auto_register = false` leaves the plugin out of
+# the generated registry so the app registers it by hand.
+#
+# [[app.plugin]]
+# id            = "istmo.data_store"
+# role          = "host"
+# platforms     = ["android", "ios"]
+# auto_register = false
+
+# Run a plugin in the `:remote` Android process instead of its default
+# deployment. `plugin` is the id from the plugin's own istmo.toml.
+#
+# [[remote_override]]
+# plugin     = "acme.example_plugin"
+# deployment = "remote"
+
+# Extra Gradle / Swift-package dependencies for the app itself (plugins
+# carry their own).
+#
+# [[gradle]]
+# group    = "androidx.security"
+# artifact = "security-crypto"
+# version  = "1.1.0-alpha06"
+#
+# [[swift_package]]
+# url          = "https://github.com/siteline/SwiftUI-Introspect"
+# product      = "SwiftUIIntrospect"
+# from_version = "1.1.4"

@@ -1,0 +1,12 @@
+---
+import Base from '../layouts/Base.astro';
+import config from '../../site.config.json';
+const base = import.meta.env.BASE_URL;
+---
+
+<Base lang="en">
+  <main class="wrap not-found">
+    <h1>Page not found</h1>
+    <p class="lead">This page is not here. <a class="link" href={base}>Go to {config.name}</a>.</p>
+  </main>
+</Base>

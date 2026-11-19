@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- `${istmoLabel}` / `${istmoIcon}` come from istmo.toml `[app]`. -->
+    <application
+        android:allowBackup="true"
+        android:label="${istmoLabel}"
+        android:icon="${istmoIcon}"
+        android:hasCode="true"
+        android:theme="@style/Theme.AppCompat.NoActionBar">
+        <!-- IstmoGameActivity starts the runtime and registers every plugin
+             (generated `IstmoPluginRegistry`) before the Rust entry point
+             runs. Subclass it to add Kotlin behaviour. -->
+        <activity
+            android:name="dev.istmo.runtime.IstmoGameActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="myos" />
+            <intent-filter>
+                <action   android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- build.rs fills this block with the `[[app.document_type]]`
+                 intent filters from istmo.toml. -->
+            <!-- istmo:documents:start -->
+<!-- istmo:documents:end -->
+        </activity>
+        <!-- build.rs fills this block with the services plugins declare
+             (`android_service` in their istmo.toml). -->
+        <!-- istmo:services:start -->
+        <!-- istmo:services:end -->
+    </application>
+</manifest>

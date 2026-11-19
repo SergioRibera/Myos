@@ -1,0 +1,23 @@
+target/
+*.swp
+*.swo
+.DS_Store
+
+# Android (more in android/.gitignore)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# iOS (more in ios/.gitignore)
+ios/*.xcodeproj/
+ios/build/
+ios/DerivedData/
+
+# Nix result symlinks
+result
+result-*
+
+# JetBrains / VS Code
+.idea/
+.vscode/

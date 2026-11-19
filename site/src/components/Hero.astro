@@ -1,0 +1,31 @@
+---
+import config from '../../site.config.json';
+import type { Lang } from '../i18n';
+import { strings } from '../i18n';
+import DownloadIcon from './DownloadIcon.astro';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const t = strings[lang];
+---
+
+<!-- Add a screenshot of the app next to the text: an `<Image>` from
+     `astro:assets` in a `.hero-media` figure, as the istmo README shows. -->
+<section class="wrap hero">
+  <h1>{config.name}</h1>
+  <p class="lead">{config.description[lang]}</p>
+  <div class="hero-cta">
+    <!-- Without the script (or before it runs) this jumps to the full
+         list; the script turns it into the file for this device. -->
+    <a class="button primary" id="hero-download" href="#download">
+      <DownloadIcon />
+      <span data-hero-label>{t.hero.ctaGeneric}</span>
+    </a>
+    <p class="small muted" data-hero-meta></p>
+    <p class="small" data-hero-ios hidden>{t.hero.ios}</p>
+    <a class="link" href="#download">{t.hero.others}</a>
+  </div>
+</section>

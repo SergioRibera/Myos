@@ -1,0 +1,44 @@
+# xcodegen spec. Generate the .xcodeproj with:
+#
+#     cargo build && cd ios && xcodegen generate
+#
+# `MyosApp/istmo-plugins.yml` is written by the crate's
+# build.rs (any `cargo build` / `cargo check` writes it, so run one before
+# the first `xcodegen generate`). It brings in the plugin sources, the app
+# identity and deployment target from istmo.toml, the Rust library link
+# settings and the pre-build phase that runs cargo. Settings here win
+# over the fragment's, so keep bundle id / version / linker flags out.
+
+name: MyosApp
+
+include:
+  - path: MyosApp/istmo-plugins.yml
+
+options:
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+packages:
+  IstmoRuntime:
+    url: https://github.com/SergioRibera/istmo
+    exactVersion: "0.1.1-alpha.6"
+
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  MyosApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: MyosApp
+    info:
+      path: MyosApp/Info.plist
+    dependencies:
+      - package: IstmoRuntime
+        product: IstmoRuntime
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1"

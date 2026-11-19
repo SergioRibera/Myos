@@ -1,0 +1,43 @@
+---
+import '../styles/site.css';
+import config from '../../site.config.json';
+import type { Lang } from '../i18n';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const title = `${config.name}: ${config.description[lang]}`;
+const base = import.meta.env.BASE_URL;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const en = new URL(base, Astro.site);
+const es = new URL(`${base}es/`, Astro.site);
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={config.description[lang]} />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" hreflang="en" href={en} />
+    <link rel="alternate" hreflang="es" href={es} />
+    <link rel="alternate" hreflang="x-default" href={en} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={config.description[lang]} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+    <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16181C" media="(prefers-color-scheme: dark)" />
+    <!-- Marks the page as scripted before first paint, so panels that
+         only make sense with JS hide without a flash. -->
+    <script is:inline>document.documentElement.classList.add('js');</script>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>

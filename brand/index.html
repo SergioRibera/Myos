@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Myos logo kit</title>
+<style>
+:root{--bg:#F4F5F0;--fg:#1d2a25;--carbon:#15171C}
+body{margin:0;padding:16px;font-family:system-ui;background:var(--bg);color:var(--fg)}
+h1{font-size:22px}h2{font-size:15px;margin:28px 0 10px;text-transform:uppercase;letter-spacing:.06em}
+.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.c{background:#fff;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;min-height:140px}
+.c.d{background:var(--carbon)}.c img{max-width:100%;max-height:120px}.c span{font-size:11px;opacity:.6}
+.c.d span{color:#fff}a{color:var(--carbon)}
+.sw{display:flex;gap:8px;flex-wrap:wrap}.sw div{width:120px;height:70px;border-radius:8px;padding:6px;font-size:11px;display:flex;align-items:flex-end}
+</style>
+<h1>Myos — kit de logo</h1>
+<p><a href="guidelines.md">Guía de uso</a> · <a href="presentation.html">Presentación con mockups</a> · <a href="svg/">SVG</a> · <a href="png/">PNG</a> · <a href="app-icon/">Íconos de app</a> · <a href="web/">Web</a></p>
+<h2>Paleta</h2>
+<div class="sw"><div style="background:#15171C;color:#fff">Carbón #15171C</div><div style="background:#15171C;color:#C6F432">Lima #C6F432 (nunca fondo)</div><div style="background:#F4F5F0;color:#86B300;border:1px solid #ccc">Lima profundo #86B300</div><div style="background:#F4F5F0;border:1px solid #ccc">Tiza #F4F5F0</div></div>
+<h2>Versiones</h2>
+<div class="g" id="v"></div>
+<h2>Íconos</h2>
+<div class="g">
+<div class="c"><img src="app-icon/icon-1024.png" style="border-radius:22%"><span>iOS</span></div>
+<div class="c"><img src="app-icon/icon-tile-1024.png"><span>Escritorio</span></div>
+<div class="c"><img src="web/favicon-32.png" style="width:32px;image-rendering:pixelated"><img src="web/favicon-16.png" style="width:16px"><span>Favicon 32 / 16</span></div>
+<div class="c"><img src="web/maskable-512.png" style="border-radius:50%"><span>Maskable (círculo)</span></div>
+</div>
+<script>
+const v=["wordmark","horizontal","stacked","symbol","symbol-small"],s=["color","reversed","carbon","lime","black","white"];
+const g=document.getElementById("v");
+for(const a of v)for(const b of s){const d=document.createElement("div");
+d.className="c"+(b==="reversed"||b==="white"||b==="lime"?" d":"");
+d.innerHTML=`<img src="svg/myos-${a}-${b}.svg"><span>${a} · ${b}</span>`;g.append(d)}
+</script>
