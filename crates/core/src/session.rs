@@ -153,6 +153,18 @@ pub struct SetRecord {
     pub heart_rate: Option<HeartRate>,
     /// Superset group within the session; sets sharing it alternate.
     pub superset: Option<u16>,
+    /// Assistance (band, machine counterweight) for calisthenics.
+    pub assist: Option<Mass>,
+    /// Body weight at the time, when it matters for the load.
+    pub bodyweight: Option<Mass>,
+    /// Maximum heart rate.
+    pub max_heart_rate: Option<HeartRate>,
+    /// Swimming stroke.
+    pub stroke: Option<Stroke>,
+    /// Rest taken after the set.
+    pub rest: Option<Duration>,
+    /// Time in each heart-rate zone.
+    pub zones: Option<HeartRateZones>,
 }
 
 impl SetRecord {
@@ -170,6 +182,12 @@ impl SetRecord {
             distance: None,
             heart_rate: None,
             superset: None,
+            assist: None,
+            bodyweight: None,
+            max_heart_rate: None,
+            stroke: None,
+            rest: None,
+            zones: None,
         }
     }
 
@@ -230,6 +248,27 @@ impl SetRecord {
         self
     }
 
+    /// Set the swimming stroke.
+    #[must_use]
+    pub const fn with_stroke(mut self, stroke: Stroke) -> Self {
+        self.stroke = Some(stroke);
+        self
+    }
+
+    /// Set the rest taken after the set.
+    #[must_use]
+    pub const fn with_rest(mut self, rest: Duration) -> Self {
+        self.rest = Some(rest);
+        self
+    }
+
+    /// Set the assistance (band, machine counterweight).
+    #[must_use]
+    pub const fn with_assist(mut self, assist: Mass) -> Self {
+        self.assist = Some(assist);
+        self
+    }
+
     /// Put the set in a superset group.
     #[must_use]
     pub const fn in_superset(mut self, group: u16) -> Self {
@@ -284,3 +323,33 @@ crate::codes!(SessionOrigin {
     Import = 3,
     Wearable = 4,
 });
+
+/// Swimming stroke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Stroke {
+    /// Front crawl.
+    Freestyle,
+    /// Backstroke.
+    Backstroke,
+    /// Breaststroke.
+    Breaststroke,
+    /// Butterfly.
+    Butterfly,
+    /// Individual medley.
+    Medley,
+    /// Kick drills.
+    Kick,
+}
+
+crate::codes!(Stroke {
+    Freestyle = 1,
+    Backstroke = 2,
+    Breaststroke = 3,
+    Butterfly = 4,
+    Medley = 5,
+    Kick = 6,
+});
+
+/// Time spent in each of the five heart-rate zones (zone 1 first).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct HeartRateZones(pub [Duration; 5]);

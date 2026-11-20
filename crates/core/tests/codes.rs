@@ -5,7 +5,7 @@ use myos_core::code::Code;
 use myos_core::exercise::Modality;
 use myos_core::load::LoadModel;
 use myos_core::muscle::{Muscle, MuscleRole};
-use myos_core::session::{SessionOrigin, SetKind, Side};
+use myos_core::session::{SessionOrigin, SetKind, Side, Stroke};
 use myos_core::strength::OneRepMaxFormula;
 
 fn pinned<T: Code + PartialEq + std::fmt::Debug>(table: &[(T, u16)]) {
@@ -126,5 +126,17 @@ fn body_codes() {
         (S::HealthConnect, 4),
         (S::Garmin, 5),
         (S::Import, 6),
+    ]);
+}
+
+#[test]
+fn stroke_codes() {
+    pinned(&[
+        (Stroke::Freestyle, 1),
+        (Stroke::Backstroke, 2),
+        (Stroke::Breaststroke, 3),
+        (Stroke::Butterfly, 4),
+        (Stroke::Medley, 5),
+        (Stroke::Kick, 6),
     ]);
 }
