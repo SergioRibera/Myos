@@ -67,3 +67,64 @@ fn session_origin_codes() {
         (SessionOrigin::Wearable, 4),
     ]);
 }
+
+#[test]
+fn profile_codes() {
+    use myos_core::profile::{
+        DietMode, DistanceUnit, EffortScale, EnergyUnit, Goal, Level, MassUnit, Sex, Theme,
+    };
+    pinned(&[(Sex::Female, 1), (Sex::Male, 2), (Sex::Other, 3)]);
+    pinned(&[
+        (Goal::Hypertrophy, 1),
+        (Goal::Strength, 2),
+        (Goal::Endurance, 3),
+        (Goal::FatLoss, 4),
+        (Goal::Health, 5),
+        (Goal::Performance, 6),
+    ]);
+    pinned(&[
+        (Level::Beginner, 1),
+        (Level::Intermediate, 2),
+        (Level::Advanced, 3),
+    ]);
+    pinned(&[(Theme::System, 1), (Theme::Light, 2), (Theme::Dark, 3)]);
+    pinned(&[(MassUnit::Kilogram, 1), (MassUnit::Pound, 2)]);
+    pinned(&[(DistanceUnit::Kilometer, 1), (DistanceUnit::Mile, 2)]);
+    pinned(&[(EnergyUnit::Kilocalorie, 1), (EnergyUnit::Kilojoule, 2)]);
+    pinned(&[(EffortScale::Rir, 1), (EffortScale::Rpe, 2)]);
+    pinned(&[(DietMode::Quick, 1), (DietMode::Detailed, 2)]);
+}
+
+#[test]
+fn body_codes() {
+    use myos_core::body::{MeasurementKind as K, MeasurementMethod as M, MeasurementSource as S};
+    pinned(&[
+        (K::Weight, 1),
+        (K::BodyFat, 2),
+        (K::Waist, 3),
+        (K::Hips, 4),
+        (K::Chest, 5),
+        (K::Neck, 6),
+        (K::Arm, 7),
+        (K::Forearm, 8),
+        (K::Thigh, 9),
+        (K::Calf, 10),
+        (K::Skinfold, 11),
+    ]);
+    pinned(&[
+        (M::Unspecified, 1),
+        (M::Tape, 2),
+        (M::Scale, 3),
+        (M::Bioimpedance, 4),
+        (M::Dexa, 5),
+        (M::Caliper, 6),
+    ]);
+    pinned(&[
+        (S::Manual, 1),
+        (S::SmartScale, 2),
+        (S::HealthKit, 3),
+        (S::HealthConnect, 4),
+        (S::Garmin, 5),
+        (S::Import, 6),
+    ]);
+}

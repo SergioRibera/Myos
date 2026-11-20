@@ -104,3 +104,23 @@ impl HeartRate {
         self.bpm
     }
 }
+
+/// A body length (height, circumference), stored as whole millimeters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Length {
+    millimeters: u32,
+}
+
+impl Length {
+    /// A length of `millimeters` millimeters.
+    #[must_use]
+    pub const fn from_millimeters(millimeters: u32) -> Self {
+        Self { millimeters }
+    }
+
+    /// Whole millimeters.
+    #[must_use]
+    pub const fn millimeters(self) -> u32 {
+        self.millimeters
+    }
+}
