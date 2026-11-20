@@ -1,0 +1,37 @@
+[package]
+name = "myos-uikit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Myos design tokens and base components for Freya"
+publish = false
+
+[features]
+default = ["winit"]
+# `LaunchConfigExt::with_myos_fonts`. Off for consumers that never launch a
+# window themselves (tests, embedders).
+winit = ["freya/winit"]
+
+[dependencies]
+# No default features: the app decides gpu / accessibility / text gamma.
+# `engine`: Skia paths for the muscle map.
+freya = { version = "0.6.0-alpha.1", default-features = false, features = ["engine"] }
+
+[lints.rust]
+missing_docs = "warn"
+# No `missing_debug_implementations`: components hold Freya `Element` /
+# `LayoutData`, which do not implement `Debug`.
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+unwrap_used = "deny"
+allow_attributes_without_reason = "deny"
+
+[dev-dependencies]
+freya-testing = "0.6.0-alpha.1"

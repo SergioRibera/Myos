@@ -1,3 +1,8 @@
+[workspace]
+# The app is the root package; shared libraries live under `crates/`.
+members  = ["crates/*"]
+resolver = "3"
+
 [package]
 name    = "myos"
 version = "0.1.0"
