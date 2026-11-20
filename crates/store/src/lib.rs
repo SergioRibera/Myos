@@ -54,6 +54,10 @@ pub enum Error {
     /// corrupt file).
     #[error("wrong key or not a Myos database")]
     WrongKey,
+    /// The derived cache could not be opened even after recreating it (the
+    /// user database itself is fine).
+    #[error("derived cache cannot be opened")]
+    DerivedUnreadable,
     /// The file was written by a newer app version.
     #[error("database schema {found} is newer than this app supports ({supported})")]
     NewerSchema {

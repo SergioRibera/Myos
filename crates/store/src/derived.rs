@@ -103,7 +103,7 @@ pub(crate) fn attach(conn: &Connection, path: &Path, key: &DatabaseKey) -> Resul
     if attach_once(conn, location, key)? {
         Ok(())
     } else {
-        Err(Error::WrongKey)
+        Err(Error::DerivedUnreadable)
     }
 }
 

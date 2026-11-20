@@ -666,3 +666,22 @@ Where `crates/store` refines or departs from the sections above.
   - Transport failures requeue in-flight entries with exponential backoff and
     jitter (an explicit restore survives the requeue); entries left in flight
     by a crash are requeued at open.
+- **Key storage (`crates/vault`).** `keyring-core` with one store per target:
+  Secret Service (zbus) on Linux/BSD, legacy Keychain on macOS (needs a
+  stable signing identity, or each update prompts), data-protection Keychain
+  with `after-first-unlock-this-device-only` on iOS, Credential Manager with
+  `persistence = Local` on Windows, Android `SharedPreferences` encrypted by
+  a Keystore key (no StrongBox request, no user auth; needs `ndk-context`,
+  so processes without an activity must not open it). The key is stored as
+  hex (some stores keep only UTF-8). A stored value that cannot be decrypted
+  or decoded counts as lost: it is deleted, the database files are deleted
+  and the app reports `Reset::KeyLost` so the UI offers a restore.
+- **Database location.** Android `istmo::path::state_dir()` (=
+  `noBackupFilesDir`), elsewhere `data_local_dir()`, under `database/`.
+  Still to do natively: Android backup rules for the key's
+  `shared_prefs/keyring-default.xml`, iOS/macOS `isExcludedFromBackup` on
+  `database/`.
+- **Windows build gap.** `openssl-src` builds MSVC targets with `nmake`, so
+  the vendored OpenSSL behind SQLCipher cannot be cross-built from Linux;
+  the Windows target needs a prebuilt or separately built static libcrypto
+  (`OPENSSL_LIB_DIR` / `OPENSSL_INCLUDE_DIR` with `bundled-sqlcipher`).
