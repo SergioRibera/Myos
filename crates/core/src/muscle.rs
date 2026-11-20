@@ -4,8 +4,8 @@
 //! `BodyRegion` minus the silhouette-only regions). Subzones (muscle heads)
 //! extend this once the map has their outlines.
 
-/// A muscle region. The discriminant is a stable index into per-muscle
-/// arrays ([`Muscle::index`]); variants are only ever appended.
+/// A muscle region. Declaration order is a stable index into per-muscle
+/// arrays ([`Muscle::index`]); storage uses [`Code`](crate::code::Code).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Muscle {
     /// Neck flexors and extensors.
@@ -105,34 +105,49 @@ impl MuscleRole {
     }
 }
 
-/// A fraction in `0.0 ..= 1.0`.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct Share(f64);
+/// A fraction in `0 ..= 1`, stored exactly as basis points (1/10 000).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Share {
+    basis_points: u16,
+}
 
 impl Share {
     /// Nothing.
-    pub const NONE: Self = Self(0.0);
+    pub const NONE: Self = Self { basis_points: 0 };
     /// One half.
-    pub const HALF: Self = Self(0.5);
+    pub const HALF: Self = Self {
+        basis_points: 5_000,
+    };
     /// Everything.
-    pub const FULL: Self = Self(1.0);
+    pub const FULL: Self = Self {
+        basis_points: 10_000,
+    };
 
-    /// `None` outside `0.0 ..= 1.0` (NaN included).
+    /// `None` above 10 000 basis points.
     #[must_use]
-    pub fn new(value: f64) -> Option<Self> {
-        (0.0..=1.0).contains(&value).then_some(Self(value))
+    pub const fn from_basis_points(basis_points: u16) -> Option<Self> {
+        if basis_points <= 10_000 {
+            Some(Self { basis_points })
+        } else {
+            None
+        }
+    }
+
+    /// Basis points, for storage.
+    #[must_use]
+    pub const fn basis_points(self) -> u16 {
+        self.basis_points
     }
 
     /// The fraction.
     #[must_use]
-    pub const fn get(self) -> f64 {
-        self.0
+    pub fn get(self) -> f64 {
+        f64::from(self.basis_points) / 10_000.0
     }
 }
-
 /// One muscle an exercise works, with its role and an optional per-exercise
 /// weight that overrides the role default.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MuscleTarget {
     /// The muscle.
     pub muscle: Muscle,
@@ -166,3 +181,33 @@ impl MuscleTarget {
         self.weight.unwrap_or_else(|| self.role.default_weight())
     }
 }
+
+// Muscle codes leave room per region for subzones (muscle heads), which get
+// codes inside their parent's hundred block.
+crate::code::codes!(Muscle {
+    Neck = 100,
+    Trapezius = 200,
+    FrontDeltoids = 300,
+    RearDeltoids = 400,
+    Chest = 500,
+    Biceps = 600,
+    Triceps = 700,
+    Forearms = 800,
+    Abs = 900,
+    Obliques = 1000,
+    UpperBack = 1100,
+    LowerBack = 1200,
+    Glutes = 1300,
+    Abductors = 1400,
+    Adductors = 1500,
+    Quadriceps = 1600,
+    Hamstrings = 1700,
+    Calves = 1800,
+    Soleus = 1900,
+});
+
+crate::code::codes!(MuscleRole {
+    Primary = 1,
+    Secondary = 2,
+    Stabilizer = 3,
+});

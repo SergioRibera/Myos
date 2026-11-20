@@ -26,7 +26,7 @@ pub enum Modality {
 }
 
 /// An exercise as the load engine sees it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exercise {
     /// Stable Myos id.
     pub id: ExerciseId,
@@ -54,3 +54,10 @@ impl ExerciseLookup for [Exercise] {
         self.iter().find(|exercise| exercise.id == id)
     }
 }
+
+crate::code::codes!(Modality {
+    Strength = 1,
+    Calisthenics = 2,
+    Cardio = 3,
+    Swimming = 4,
+});

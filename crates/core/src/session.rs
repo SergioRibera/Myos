@@ -1,6 +1,6 @@
-//! Raw training records, exactly as logged.
+//! Training records, as logged.
 //!
-//! Sets are immutable facts: every derived number (load, records, 1RM) is
+//! Sets keep the raw values only: every derived number (load, records, 1RM) is
 //! recomputed from them, so a formula change never loses what the user
 //! logged.
 
@@ -232,3 +232,16 @@ pub struct Session {
     /// Sets, in order.
     pub sets: Vec<SetRecord>,
 }
+
+crate::code::codes!(SetKind {
+    Warmup = 1,
+    Working = 2,
+    Failure = 3,
+    Drop = 4,
+});
+
+crate::code::codes!(Side {
+    Both = 1,
+    Left = 2,
+    Right = 3,
+});

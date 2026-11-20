@@ -57,3 +57,5 @@ impl OneRepMax {
         })
     }
 }
+
+crate::code::codes!(OneRepMaxFormula { EpleyRirV1 = 1 });

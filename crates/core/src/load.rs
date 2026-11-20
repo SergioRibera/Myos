@@ -203,3 +203,5 @@ impl LoadModel {
         }
     }
 }
+
+crate::code::codes!(LoadModel { WeightedV1 = 1 });

@@ -39,7 +39,7 @@ fn bench() -> Exercise {
             MuscleTarget::new(Muscle::Chest, MuscleRole::Primary),
             MuscleTarget::new(Muscle::Triceps, MuscleRole::Secondary),
             MuscleTarget::new(Muscle::FrontDeltoids, MuscleRole::Secondary)
-                .with_weight(Share::new(0.3).unwrap()),
+                .with_weight(Share::from_basis_points(3_000).unwrap()),
             MuscleTarget::new(Muscle::Abs, MuscleRole::Stabilizer),
         ],
     }
