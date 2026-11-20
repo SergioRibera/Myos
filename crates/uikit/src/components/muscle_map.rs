@@ -103,6 +103,28 @@ impl BodyView {
     }
 }
 
+/// Body side, anatomical: the person's own left and right. In the front
+/// view the person's left is on the viewer's right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Side {
+    /// The person's left.
+    Left,
+    /// The person's right.
+    Right,
+}
+
+impl Side {
+    /// Both sides, left first.
+    pub const BOTH: [Self; 2] = [Self::Left, Self::Right];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Right => 1,
+        }
+    }
+}
+
 /// How one region is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum RegionState {
@@ -113,6 +135,9 @@ pub enum RegionState {
     Deficit(u8),
     /// Above range: coral fill.
     Excess,
+    /// Any color: muscle-group legends, exercise previews, comparisons.
+    /// Pick it from the palette so it works in both appearances.
+    Custom(Color),
     /// Nothing logged yet.
     #[default]
     Empty,
@@ -125,33 +150,43 @@ impl RegionState {
                 palette.map_levels[if step > 3 { 3 } else { step as usize }]
             }
             Self::Excess => palette.excess,
+            Self::Custom(color) => color,
             Self::Empty => palette.map_levels[0],
         }
     }
 }
 
-/// State of every region. Unset regions are [`RegionState::Empty`].
+/// State of every region on each side. Unset regions are
+/// [`RegionState::Empty`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MuscleMapState([RegionState; BodyRegion::COUNT]);
+pub struct MuscleMapState([[RegionState; 2]; BodyRegion::COUNT]);
 
 impl Default for MuscleMapState {
     fn default() -> Self {
-        Self([RegionState::Empty; BodyRegion::COUNT])
+        Self([[RegionState::Empty; 2]; BodyRegion::COUNT])
     }
 }
 
 impl MuscleMapState {
-    /// Set `region` to `state`.
+    /// Set `region` to `state` on both sides.
     #[must_use]
-    pub const fn with(mut self, region: BodyRegion, state: RegionState) -> Self {
-        self.0[region.index()] = state;
+    pub const fn with(self, region: BodyRegion, state: RegionState) -> Self {
+        self.with_side(region, Side::Left, state)
+            .with_side(region, Side::Right, state)
+    }
+
+    /// Set `region` to `state` on one `side` only, for unilateral work and
+    /// left / right imbalances.
+    #[must_use]
+    pub const fn with_side(mut self, region: BodyRegion, side: Side, state: RegionState) -> Self {
+        self.0[region.index()][side.index()] = state;
         self
     }
 
-    /// State of `region`.
+    /// State of `region` on `side`.
     #[must_use]
-    pub const fn get(&self, region: BodyRegion) -> RegionState {
-        self.0[region.index()]
+    pub const fn get(&self, region: BodyRegion, side: Side) -> RegionState {
+        self.0[region.index()][side.index()]
     }
 }
 
@@ -164,6 +199,24 @@ impl FromIterator<(BodyRegion, RegionState)> for MuscleMapState {
     }
 }
 
+impl FromIterator<(BodyRegion, Side, RegionState)> for MuscleMapState {
+    fn from_iter<I: IntoIterator<Item = (BodyRegion, Side, RegionState)>>(iter: I) -> Self {
+        iter.into_iter()
+            .fold(Self::default(), |map, (region, side, state)| {
+                map.with_side(region, side, state)
+            })
+    }
+}
+
+/// The muscle under a click or tap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MuscleHit {
+    /// Region pressed.
+    pub region: BodyRegion,
+    /// Side pressed.
+    pub side: Side,
+}
+
 /// One outline polygon in the 1000 × 2000 model box.
 #[derive(Debug)]
 struct Shape {
@@ -172,6 +225,21 @@ struct Shape {
 }
 
 impl Shape {
+    /// Anatomical side: polygons never cross the midline (only the head
+    /// does, and it is not a muscle), so the mean x decides.
+    fn side(&self, view: BodyView) -> Side {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "polygons have a handful of points"
+        )]
+        let count = self.points.len() as f32;
+        let viewer_left = self.points.iter().map(|(x, _)| x).sum::<f32>() / count < MODEL.0 / 2.;
+        match (view, viewer_left) {
+            (BodyView::Front, true) | (BodyView::Back, false) => Side::Right,
+            (BodyView::Front, false) | (BodyView::Back, true) => Side::Left,
+        }
+    }
+
     /// Closed Catmull-Rom spline through the polygon corners, so the
     /// low-poly outlines read as muscle bellies.
     fn path(&self) -> Path {
@@ -209,16 +277,19 @@ fn fit(size: Size2D) -> (f32, (f32, f32)) {
     (scale, offset)
 }
 
-/// Body map of one view. Default size follows the proposal (220 × 420);
-/// set `.width(..)` / `.height(..)` to resize, the drawing keeps its aspect.
+/// Body map of one view; every region paints on its own, per side.
+///
+/// Colors come from a [`MuscleMapState`]. Default size follows the proposal (220 × 420); set
+/// `.width(..)` / `.height(..)` to resize, the drawing keeps its aspect.
 ///
 /// ```rust,no_run
 /// # use freya::prelude::*;
-/// # use myos_uikit::{BodyRegion, BodyView, MuscleMap, MuscleMapState, RegionState};
+/// # use myos_uikit::{BodyRegion, BodyView, MuscleMap, MuscleMapState, RegionState, Side};
 /// fn app() -> impl IntoElement {
 ///     let state = MuscleMapState::default()
 ///         .with(BodyRegion::Chest, RegionState::Load(3))
-///         .with(BodyRegion::Hamstrings, RegionState::Deficit(1));
+///         .with(BodyRegion::Hamstrings, RegionState::Deficit(1))
+///         .with_side(BodyRegion::Calves, Side::Left, RegionState::Load(2));
 ///     MuscleMap::new(BodyView::Back).state(state)
 /// }
 /// ```
@@ -226,7 +297,7 @@ fn fit(size: Size2D) -> (f32, (f32, f32)) {
 pub struct MuscleMap {
     view: BodyView,
     state: MuscleMapState,
-    on_region_press: Option<EventHandler<BodyRegion>>,
+    on_region_press: Option<EventHandler<MuscleHit>>,
     layout: LayoutData,
 }
 
@@ -251,9 +322,9 @@ impl MuscleMap {
         self
     }
 
-    /// Called with the muscle under a click or tap.
+    /// Called with the muscle and side under a click or tap.
     #[must_use]
-    pub fn on_region_press(mut self, on_region_press: impl Into<EventHandler<BodyRegion>>) -> Self {
+    pub fn on_region_press(mut self, on_region_press: impl Into<EventHandler<MuscleHit>>) -> Self {
         self.on_region_press = Some(on_region_press.into());
         self
     }
@@ -268,7 +339,7 @@ impl LayoutExt for MuscleMap {
 impl ContainerExt for MuscleMap {}
 
 /// Paint the body: silhouette, muscle fills, separators, deficit outlines.
-fn draw(canvas: &Canvas, size: Size2D, view: BodyView, state: MuscleMapState, palette: &Palette) {
+fn draw(canvas: &Canvas, size: Size2D, view: BodyView, state: &MuscleMapState, palette: &Palette) {
     let (scale, (dx, dy)) = fit(size);
     canvas.save();
     // The canvas arrives translated to the element origin, in logical px.
@@ -277,10 +348,10 @@ fn draw(canvas: &Canvas, size: Size2D, view: BodyView, state: MuscleMapState, pa
 
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
-    let shapes: Vec<(BodyRegion, Path)> = view
+    let shapes: Vec<(&Shape, Path)> = view
         .shapes()
         .iter()
-        .map(|shape| (shape.region, shape.path()))
+        .map(|shape| (shape, shape.path()))
         .collect();
 
     paint.set_color(palette.map_silhouette);
@@ -291,8 +362,8 @@ fn draw(canvas: &Canvas, size: Size2D, view: BodyView, state: MuscleMapState, pa
     }
 
     let separator = Stroke::HAIRLINE / scale;
-    for (region, path) in shapes.iter().filter(|(region, _)| region.is_muscle()) {
-        let region_state = state.get(*region);
+    for (shape, path) in shapes.iter().filter(|(shape, _)| shape.region.is_muscle()) {
+        let region_state = state.get(shape.region, shape.side(view));
         paint.set_style(PaintStyle::Fill);
         paint.set_path_effect(None);
         paint.set_color(region_state.fill(palette));
@@ -320,7 +391,7 @@ impl Component for MuscleMap {
         let state = self.state;
         let painter = RenderCallback::new(move |ctx: &mut FillRenderContext| {
             if let RenderTarget::Background { canvas, .. } = &ctx.target {
-                draw(canvas, ctx.size, view, state, palette);
+                draw(canvas, ctx.size, view, &state, palette);
             }
         });
         let mut size = use_state(Size2D::default);
@@ -355,7 +426,10 @@ impl Component for MuscleMap {
                         .rev()
                         .find(|shape| shape.region.is_muscle() && shape.path().contains(point));
                     if let Some(shape) = hit {
-                        handler.call(shape.region);
+                        handler.call(MuscleHit {
+                            region: shape.region,
+                            side: shape.side(view),
+                        });
                     }
                 })
             })

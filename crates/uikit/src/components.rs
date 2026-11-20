@@ -21,7 +21,9 @@ pub use alert_card::{AlertCard, AlertKind};
 pub use button::{Button, ButtonKind, ButtonSize};
 pub use chip::{Chip, ChipKind, Status};
 pub use layout::{Card, Screen, ThemeScope};
-pub use muscle_map::{BodyRegion, BodyView, MuscleMap, MuscleMapState, RegionState};
+pub use muscle_map::{
+    BodyRegion, BodyView, MuscleHit, MuscleMap, MuscleMapState, RegionState, Side,
+};
 pub use nav::{NavBar, TabBar, TabItem};
 pub use select_option::SelectOption;
 pub use set_row::{SetRow, SetState};

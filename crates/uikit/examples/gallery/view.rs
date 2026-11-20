@@ -31,20 +31,7 @@ fn row() -> Rect {
 }
 
 fn column(mode: ThemeMode) -> impl IntoElement {
-    let map = ui::MuscleMapState::default()
-        .with(ui::BodyRegion::Chest, ui::RegionState::Load(3))
-        .with(ui::BodyRegion::FrontDeltoids, ui::RegionState::Load(2))
-        .with(ui::BodyRegion::Biceps, ui::RegionState::Load(2))
-        .with(ui::BodyRegion::Abs, ui::RegionState::Load(1))
-        .with(ui::BodyRegion::Obliques, ui::RegionState::Load(1))
-        .with(ui::BodyRegion::Quadriceps, ui::RegionState::Load(3))
-        .with(ui::BodyRegion::Trapezius, ui::RegionState::Load(1))
-        .with(ui::BodyRegion::UpperBack, ui::RegionState::Deficit(0))
-        .with(ui::BodyRegion::LowerBack, ui::RegionState::Excess)
-        .with(ui::BodyRegion::Glutes, ui::RegionState::Load(2))
-        .with(ui::BodyRegion::Hamstrings, ui::RegionState::Deficit(1))
-        .with(ui::BodyRegion::Calves, ui::RegionState::Load(1))
-        .with(ui::BodyRegion::Triceps, ui::RegionState::Load(3));
+    let map = sample_map(mode);
 
     ui::ThemeScope::new(mode)
         .width(Size::px(ui::Space::LG.mul_add(2., ui::Dimen::MOBILE_WIDTH)))
@@ -116,8 +103,8 @@ fn column(mode: ThemeMode) -> impl IntoElement {
         .child(section("MAPA"))
         .child(
             row()
-                .child(map_view(ui::BodyView::Front, map))
-                .child(map_view(ui::BodyView::Back, map)),
+                .child(map_view(ui::BodyView::Front, &map))
+                .child(map_view(ui::BodyView::Back, &map)),
         )
         .child(
             ui::TabBar::new()
@@ -129,9 +116,45 @@ fn column(mode: ThemeMode) -> impl IntoElement {
         )
 }
 
-fn map_view(view: ui::BodyView, state: ui::MuscleMapState) -> ui::MuscleMap {
+fn map_view(view: ui::BodyView, state: &ui::MuscleMapState) -> ui::MuscleMap {
     ui::MuscleMap::new(view)
-        .state(state)
+        .state(*state)
         .width(Size::px(180.))
         .height(Size::px(344.))
+}
+
+/// A week with every kind of state, including one-sided calves and a custom
+/// color.
+fn sample_map(mode: ThemeMode) -> ui::MuscleMapState {
+    let palette = match mode {
+        ThemeMode::Light => &ui::Palette::LIGHT,
+        ThemeMode::Dark | ThemeMode::System => &ui::Palette::DARK,
+    };
+    ui::MuscleMapState::default()
+        .with(ui::BodyRegion::Chest, ui::RegionState::Load(3))
+        .with(ui::BodyRegion::FrontDeltoids, ui::RegionState::Load(2))
+        .with(ui::BodyRegion::Biceps, ui::RegionState::Load(2))
+        .with(ui::BodyRegion::Abs, ui::RegionState::Load(1))
+        .with(ui::BodyRegion::Obliques, ui::RegionState::Load(1))
+        .with(ui::BodyRegion::Quadriceps, ui::RegionState::Load(3))
+        .with(ui::BodyRegion::Trapezius, ui::RegionState::Load(1))
+        .with(ui::BodyRegion::UpperBack, ui::RegionState::Deficit(0))
+        .with(ui::BodyRegion::LowerBack, ui::RegionState::Excess)
+        .with(ui::BodyRegion::Glutes, ui::RegionState::Load(2))
+        .with(ui::BodyRegion::Hamstrings, ui::RegionState::Deficit(1))
+        .with_side(
+            ui::BodyRegion::Calves,
+            ui::Side::Left,
+            ui::RegionState::Load(3),
+        )
+        .with_side(
+            ui::BodyRegion::Calves,
+            ui::Side::Right,
+            ui::RegionState::Load(1),
+        )
+        .with(
+            ui::BodyRegion::Forearms,
+            ui::RegionState::Custom(palette.deficit),
+        )
+        .with(ui::BodyRegion::Triceps, ui::RegionState::Load(3))
 }
