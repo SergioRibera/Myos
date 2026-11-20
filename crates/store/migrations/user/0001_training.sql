@@ -6,7 +6,9 @@
 --   server_rev per-user revision acked by the server
 --   local_seq  bumped on every local or remote write (derived-data watermark)
 --   deleted_at tombstone; deletes win
---   extra      fields this app version does not know, sent back unchanged
+--   extra      TLV fields this app version does not know, sent back unchanged
+--   field_hlc  TLV tag -> hlc for tables merged per field; NULL means every
+--              field was last written at the row hlc
 -- Enum columns only get range checks: newer app versions add codes.
 
 CREATE TABLE sync_state (
@@ -14,9 +16,16 @@ CREATE TABLE sync_state (
   device_id        BLOB NOT NULL CHECK (length(device_id) = 16),
   node             INTEGER NOT NULL,
   user_id          BLOB CHECK (user_id IS NULL OR length(user_id) = 16),
+  -- Key for deterministic ids of natural keys; device-local until an
+  -- account exists, then replaced by the account key (id_epoch bumps).
+  user_key         BLOB NOT NULL CHECK (length(user_key) = 32),
+  id_epoch         INTEGER NOT NULL DEFAULT 0,
   hlc_last         INTEGER NOT NULL,
   server_offset_ms INTEGER NOT NULL DEFAULT 0,
-  local_seq        INTEGER NOT NULL DEFAULT 0
+  local_seq        INTEGER NOT NULL DEFAULT 0,
+  proto            INTEGER NOT NULL DEFAULT 1,
+  -- Set when the server requires a newer protocol: local writes refused.
+  read_only        INTEGER NOT NULL DEFAULT 0 CHECK (read_only IN (0, 1))
 ) STRICT;
 
 -- One entry per row with unpushed changes. The payload is built from the row
@@ -31,6 +40,7 @@ CREATE TABLE sync_outbox (
   state      INTEGER NOT NULL DEFAULT 0 CHECK (state BETWEEN 0 AND 2),
   attempts   INTEGER NOT NULL DEFAULT 0,
   error_code INTEGER,
+  next_attempt_at INTEGER,
   created_at INTEGER NOT NULL
 ) STRICT;
 CREATE UNIQUE INDEX sync_outbox_pending ON sync_outbox (entity, row_id) WHERE state = 0;
@@ -95,6 +105,7 @@ CREATE TABLE custom_exercise (
   hlc INTEGER NOT NULL, node INTEGER NOT NULL, server_rev INTEGER,
   local_seq INTEGER NOT NULL, deleted_at INTEGER, extra BLOB
 ) STRICT;
+CREATE INDEX custom_exercise_seq ON custom_exercise (local_seq);
 
 CREATE TABLE custom_exercise_target (
   exercise_id BLOB NOT NULL
@@ -105,12 +116,13 @@ CREATE TABLE custom_exercise_target (
   PRIMARY KEY (exercise_id, muscle)
 ) STRICT, WITHOUT ROWID;
 
--- Local index of every exercise referenced, rebuilt from synced rows.
+-- Local index of every exercise referenced, rebuilt from synced rows. The
+-- source follows from the id: catalog ids are UUID v5, user and
+-- organization exercises v7. No foreign key: sets may arrive before the
+-- custom exercise they use.
 CREATE TABLE exercise_ref (
-  id        BLOB PRIMARY KEY CHECK (length(id) = 16),
-  src       INTEGER NOT NULL CHECK (src BETWEEN 1 AND 3),
-  custom_id BLOB REFERENCES custom_exercise (id) DEFERRABLE INITIALLY DEFERRED,
-  CHECK ((src = 2) = (custom_id IS NOT NULL))
+  id  BLOB PRIMARY KEY CHECK (length(id) = 16),
+  src INTEGER NOT NULL CHECK (src BETWEEN 0 AND 255)
 ) STRICT;
 
 CREATE TABLE import_batch (
@@ -144,6 +156,7 @@ CREATE TABLE workout_session (
   CHECK (ended_at IS NULL OR ended_at >= started_at)
 ) STRICT;
 CREATE INDEX workout_session_day ON workout_session (day) WHERE deleted_at IS NULL;
+CREATE INDEX workout_session_seq ON workout_session (local_seq);
 
 -- No foreign key to workout_session: both are sync roots and may arrive in
 -- any order. A set is live only while its session is.
@@ -162,14 +175,14 @@ CREATE TABLE set_entry (
   reps            INTEGER CHECK (reps BETWEEN 0 AND 10000),
   rir             INTEGER CHECK (rir BETWEEN 0 AND 10),
   rpe_half        INTEGER CHECK (rpe_half BETWEEN 2 AND 20),
-  duration_ms     INTEGER CHECK (duration_ms >= 0),
-  distance_m      INTEGER CHECK (distance_m >= 0),
+  duration_ms     INTEGER CHECK (duration_ms BETWEEN 0 AND 604800000),
+  distance_m      INTEGER CHECK (distance_m BETWEEN 0 AND 4294967295),
   hr_avg_bpm      INTEGER CHECK (hr_avg_bpm BETWEEN 25 AND 250),
   hr_max_bpm      INTEGER CHECK (hr_max_bpm BETWEEN 25 AND 250),
   stroke          INTEGER CHECK (stroke BETWEEN 0 AND 255),
   hr_zones        BLOB,
-  superset        INTEGER CHECK (superset >= 0),
-  rest_ms         INTEGER CHECK (rest_ms >= 0),
+  superset        INTEGER CHECK (superset BETWEEN 0 AND 65535),
+  rest_ms         INTEGER CHECK (rest_ms BETWEEN 0 AND 86400000),
   completed_at    INTEGER,
   hlc INTEGER NOT NULL, node INTEGER NOT NULL, server_rev INTEGER,
   local_seq INTEGER NOT NULL, deleted_at INTEGER, extra BLOB,
@@ -179,6 +192,7 @@ CREATE TABLE set_entry (
 CREATE INDEX set_entry_session ON set_entry (session_id, position) WHERE deleted_at IS NULL;
 CREATE INDEX set_entry_history ON set_entry (exercise_id, day) WHERE deleted_at IS NULL;
 CREATE INDEX set_entry_day ON set_entry (day) WHERE deleted_at IS NULL;
+CREATE INDEX set_entry_seq ON set_entry (local_seq);
 
 CREATE TABLE external_activity (
   id          BLOB PRIMARY KEY CHECK (length(id) = 16),
@@ -189,6 +203,10 @@ CREATE TABLE external_activity (
   hlc INTEGER NOT NULL, node INTEGER NOT NULL, server_rev INTEGER,
   local_seq INTEGER NOT NULL, deleted_at INTEGER, extra BLOB
 ) STRICT;
+-- Not unique: rows minted under different pre-login keys may coexist until
+-- the login rewrite merges them; a unique index would abort pulls.
+CREATE INDEX external_activity_key ON external_activity (source, external_id)
+  WHERE deleted_at IS NULL;
 
 CREATE TABLE body_measurement (
   id              BLOB PRIMARY KEY CHECK (length(id) = 16),
@@ -196,7 +214,7 @@ CREATE TABLE body_measurement (
   day             INTEGER NOT NULL CHECK (day BETWEEN 0 AND 73000),
   tz_offset_min   INTEGER NOT NULL CHECK (tz_offset_min BETWEEN -840 AND 840),
   kind            INTEGER NOT NULL CHECK (kind BETWEEN 0 AND 65535),
-  side            INTEGER NOT NULL DEFAULT 0 CHECK (side BETWEEN 0 AND 2),
+  side            INTEGER NOT NULL DEFAULT 0 CHECK (side BETWEEN 0 AND 255),  -- 0 = none
   method          INTEGER NOT NULL DEFAULT 0 CHECK (method BETWEEN 0 AND 255),
   value           INTEGER NOT NULL,
   source          INTEGER NOT NULL CHECK (source BETWEEN 0 AND 255),
@@ -207,3 +225,4 @@ CREATE TABLE body_measurement (
   local_seq INTEGER NOT NULL, deleted_at INTEGER, extra BLOB
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX body_measurement_kind_day ON body_measurement (kind, day) WHERE deleted_at IS NULL;
+CREATE INDEX body_measurement_seq ON body_measurement (local_seq);

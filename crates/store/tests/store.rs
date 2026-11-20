@@ -68,7 +68,7 @@ fn file_is_encrypted_and_reopens_only_with_its_key() {
     let header = std::fs::read(&db.0).unwrap();
     assert!(!header.starts_with(b"SQLite format 3"));
 
-    let same = DatabaseKey::from(*key.as_bytes());
+    let same = DatabaseKey::take(&mut key.as_bytes().clone());
     let store = Store::open(&db.0, &same).unwrap();
     let week = DaySpan::iso_week(date(2026, 11, 18));
     assert_eq!(store.sessions_in(week).unwrap().sessions.len(), 1);
@@ -80,7 +80,7 @@ fn file_is_encrypted_and_reopens_only_with_its_key() {
 
 #[test]
 fn key_debug_is_redacted() {
-    let key = DatabaseKey::from([7; 32]);
+    let key = DatabaseKey::take(&mut [7; 32]);
     assert_eq!(format!("{key:?}"), "DatabaseKey(<redacted>)");
 }
 
@@ -101,7 +101,7 @@ fn logged_sets_round_trip_in_order() {
     let first_id = store.log_set(session, &first).unwrap();
     store.log_set(session, &second).unwrap();
 
-    let sets = store.sets_of(session).unwrap();
+    let sets = store.sets_of(session).unwrap().sets;
     assert_eq!(sets.len(), 2);
     assert_eq!(sets[0].id, first_id);
     assert_eq!(sets[0].record, first);
@@ -117,10 +117,10 @@ fn edits_and_deletes_respect_liveness() {
 
     let fixed = working_set(&bench, 82.5);
     store.update_set(set, &fixed).unwrap();
-    assert_eq!(store.sets_of(session).unwrap()[0].record, fixed);
+    assert_eq!(store.sets_of(session).unwrap().sets[0].record, fixed);
 
     store.delete_set(set).unwrap();
-    assert!(store.sets_of(session).unwrap().is_empty());
+    assert!(store.sets_of(session).unwrap().sets.is_empty());
     assert!(matches!(
         store.update_set(set, &fixed),
         Err(Error::NotFound(_))
@@ -136,7 +136,7 @@ fn edits_and_deletes_respect_liveness() {
         Err(Error::NotFound(_))
     ));
     // The set itself is not tombstoned, it only stops being visible.
-    assert!(store.sets_of(session).unwrap().is_empty());
+    assert!(store.sets_of(session).unwrap().sets.is_empty());
 }
 
 #[test]
@@ -198,4 +198,79 @@ fn engine_reads_the_week_from_the_store() {
 
     let next_week = DaySpan::iso_week(date(2026, 11, 25));
     assert!(store.sessions_in(next_week).unwrap().sessions.is_empty());
+}
+
+#[test]
+fn every_set_field_round_trips() {
+    use myos_core::session::{HeartRateZones, Stroke};
+    use std::time::Duration;
+
+    let mut store = Store::open_in_memory(&DatabaseKey::generate().unwrap()).unwrap();
+    let swim = bench();
+    let session = store.start_session(draft()).unwrap();
+    let mut set = SetRecord::new(swim.id)
+        .with_distance(myos_core::units::Distance::from_meters(400))
+        .with_duration(Duration::from_secs(420))
+        .with_heart_rate(HeartRate::from_bpm(140).unwrap())
+        .with_stroke(Stroke::Butterfly)
+        .with_rest(Duration::from_secs(90))
+        .with_assist(Mass::from_kg(10.0).unwrap());
+    set.bodyweight = Mass::from_kg(78.5);
+    set.max_heart_rate = HeartRate::from_bpm(171);
+    set.zones = Some(HeartRateZones([
+        Duration::from_secs(10),
+        Duration::from_secs(60),
+        Duration::from_secs(200),
+        Duration::from_secs(150),
+        Duration::ZERO,
+    ]));
+    store.log_set(session, &set).unwrap();
+    assert_eq!(store.sets_of(session).unwrap().sets[0].record, set);
+
+    let mut bad = set.clone();
+    bad.max_heart_rate = HeartRate::from_bpm(120);
+    assert!(matches!(
+        store.log_set(session, &bad),
+        Err(Error::OutOfRange("max_heart_rate"))
+    ));
+    let heavy = SetRecord::new(swim.id).with_lift(Mass::from_grams(4_000_001), 1);
+    assert!(matches!(
+        store.log_set(session, &heavy),
+        Err(Error::OutOfRange(_))
+    ));
+}
+
+#[test]
+fn sets_of_deleted_sessions_cannot_change() {
+    let mut store = Store::open_in_memory(&DatabaseKey::generate().unwrap()).unwrap();
+    let bench = bench();
+    let session = store.start_session(draft()).unwrap();
+    let set = store.log_set(session, &working_set(&bench, 80.0)).unwrap();
+    store.delete_session(session).unwrap();
+    assert!(matches!(
+        store.update_set(set, &working_set(&bench, 90.0)),
+        Err(Error::NotFound(_))
+    ));
+    assert!(matches!(store.delete_set(set), Err(Error::NotFound(_))));
+}
+
+#[test]
+fn merged_outbox_entries_get_a_fresh_op_id() {
+    let mut store = Store::open_in_memory(&DatabaseKey::generate().unwrap()).unwrap();
+    let bench = bench();
+    let session = store.start_session(draft()).unwrap();
+    let set = store.log_set(session, &working_set(&bench, 80.0)).unwrap();
+    let find = |store: &Store| {
+        store
+            .pending_outbox(10)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.row_id == set.uuid())
+            .unwrap()
+    };
+    let before = find(&store);
+    store.update_set(set, &working_set(&bench, 85.0)).unwrap();
+    let after = find(&store);
+    assert_eq!(before.seq, after.seq);
+    assert_ne!(before.op_id, after.op_id);
 }

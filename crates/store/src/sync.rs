@@ -80,7 +80,9 @@ pub(crate) fn sql_hlc(hlc: Hlc) -> Result<i64, Error> {
 }
 
 /// Queue `row_id` for push. A pending entry for the same row is updated in
-/// place, keeping its position.
+/// place, keeping its position, with a fresh `op_id` (the old one may already
+/// have a server receipt from an attempt that timed out). An explicit restore
+/// is not downgraded to a plain upsert: deletes win unless restored.
 pub(crate) fn enqueue(
     tx: &Transaction<'_>,
     entity: Entity,
@@ -92,7 +94,10 @@ pub(crate) fn enqueue(
         "INSERT INTO sync_outbox (op_id, entity, row_id, op, hlc, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT (entity, row_id) WHERE state = 0
-         DO UPDATE SET op = excluded.op, hlc = excluded.hlc",
+         DO UPDATE SET
+           op_id = excluded.op_id,
+           op = CASE WHEN op = 3 AND excluded.op = 1 THEN 3 ELSE excluded.op END,
+           hlc = excluded.hlc",
         (
             Uuid::now_v7().as_bytes().as_slice(),
             entity.code(),

@@ -10,10 +10,13 @@ publish = false
 [dependencies]
 # OS randomness for database keys.
 getrandom = "0.4"
+# Deterministic ids for natural keys (`HMAC-SHA256`, recomputable server-side).
+hmac = "0.13"
 jiff = { version = "1.0", default-features = false, features = ["std"] }
 myos-core = { path = "../core" }
+sha2 = { version = "0.11", default-features = false }
 thiserror = "2.0"
-uuid = { version = "1.29", features = ["v7"] }
+uuid = { version = "1.29", features = ["v7", "v8"] }
 # Wipes database keys from memory on drop.
 zeroize = "1.9"
 

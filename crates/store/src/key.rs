@@ -42,11 +42,15 @@ impl DatabaseKey {
     }
 }
 
-impl From<[u8; 32]> for DatabaseKey {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self {
-            bytes: Zeroizing::new(bytes),
-        }
+impl DatabaseKey {
+    /// Take the key out of `bytes` (read back from the keystore), wiping the
+    /// caller's buffer.
+    pub fn take(bytes: &mut [u8; 32]) -> Self {
+        let key = Self {
+            bytes: Zeroizing::new(*bytes),
+        };
+        zeroize::Zeroize::zeroize(bytes);
+        key
     }
 }
 

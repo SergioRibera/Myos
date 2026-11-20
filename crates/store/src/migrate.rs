@@ -7,21 +7,35 @@ use crate::Error;
 /// Migrations of `user.db`, in order. Never edit a shipped entry: append.
 pub(crate) const USER: &[&str] = &[include_str!("../migrations/user/0001_training.sql")];
 
-/// Bring `conn` to the latest of `migrations`. Each step runs in its own
-/// transaction and must leave no foreign-key violation behind.
+/// Bring `conn` to the latest of `migrations`.
+///
+/// Foreign keys are off while migrating (a table rebuild must not cascade);
+/// each step runs in its own immediate transaction, re-reads the version
+/// inside it (another connection may have migrated meanwhile) and must
+/// leave no foreign-key violation behind.
 pub(crate) fn run(conn: &mut Connection, migrations: &[&str]) -> Result<(), Error> {
+    conn.pragma_update(None, "foreign_keys", false)?;
+    let result = run_steps(conn, migrations);
+    conn.pragma_update(None, "foreign_keys", true)?;
+    result
+}
+
+fn run_steps(conn: &mut Connection, migrations: &[&str]) -> Result<(), Error> {
     let supported = migrations.len();
-    let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    let current = usize::try_from(current).unwrap_or(usize::MAX);
-    if current > supported {
-        return Err(Error::NewerSchema {
-            found: current,
-            supported,
-        });
-    }
-    for (index, sql) in migrations.iter().enumerate().skip(current) {
-        let version = index + 1;
+    loop {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let current = usize::try_from(current).map_err(|_| Error::OutOfRange("user_version"))?;
+        if current > supported {
+            return Err(Error::NewerSchema {
+                found: current,
+                supported,
+            });
+        }
+        let Some(sql) = migrations.get(current) else {
+            return Ok(());
+        };
+        let version = current + 1;
         tx.execute_batch(sql)?;
         let violations: i64 =
             tx.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
@@ -33,13 +47,11 @@ pub(crate) fn run(conn: &mut Connection, migrations: &[&str]) -> Result<(), Erro
         tx.pragma_update(
             None,
             "user_version",
-            u32::try_from(version).unwrap_or(u32::MAX),
+            i64::try_from(version).map_err(|_| Error::OutOfRange("user_version"))?,
         )?;
         tx.commit()?;
     }
-    Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;

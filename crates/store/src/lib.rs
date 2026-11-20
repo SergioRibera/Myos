@@ -6,8 +6,10 @@
 
 mod convert;
 mod hlc;
+mod ids;
 mod key;
 mod migrate;
+mod profile;
 mod sync;
 pub mod tlv;
 mod training;
@@ -19,8 +21,9 @@ use uuid::Uuid;
 
 pub use hlc::Hlc;
 pub use key::DatabaseKey;
+pub use profile::MeasurementsRead;
 pub use sync::{Entity, Op, OutboxEntry};
-pub use training::{SessionDraft, SessionsRead, StoredSet};
+pub use training::{SessionDraft, SessionsRead, SetsRead, StoredSet};
 
 /// Storage failure.
 #[derive(Debug, thiserror::Error)]
@@ -50,12 +53,32 @@ pub enum Error {
     /// The OS could not provide randomness for a key.
     #[error("system randomness unavailable: {0}")]
     Random(getrandom::Error),
+    /// The server requires a newer app: local writes are refused until it
+    /// updates.
+    #[error("this app version is read-only until it is updated")]
+    ReadOnly,
+    /// The profile breaks a rule (minimum age, implausible birth year).
+    #[error(transparent)]
+    Profile(#[from] myos_core::profile::ProfileError),
+    /// A body measurement is implausible or has the wrong side.
+    #[error(transparent)]
+    Measurement(#[from] myos_core::body::MeasurementError),
     /// The row does not exist or was deleted.
     #[error("{0} not found")]
     NotFound(&'static str),
+    /// The file system cannot run the database in WAL mode.
+    #[error("journal mode {0} instead of WAL")]
+    JournalMode(String),
     /// A value does not fit its stored range.
     #[error("{0} is out of range")]
     OutOfRange(&'static str),
+}
+
+/// Where the database lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Durability {
+    File,
+    Memory,
 }
 
 /// Stamp shared by every row written in one transaction.
@@ -81,15 +104,20 @@ impl Store {
     /// [`Error::WrongKey`] when the key does not open the file,
     /// [`Error::NewerSchema`] when a newer app wrote it.
     pub fn open(path: impl AsRef<Path>, key: &DatabaseKey) -> Result<Self, Error> {
-        Self::setup(Connection::open(path)?, key)
+        Self::setup(Connection::open(path)?, key, Durability::File)
     }
 
-    /// An encrypted in-memory database (tests, previews).
+    /// An in-memory database (tests, previews). `SQLCipher` does not encrypt
+    /// memory databases; the key only exercises the same setup path.
     pub fn open_in_memory(key: &DatabaseKey) -> Result<Self, Error> {
-        Self::setup(Connection::open_in_memory()?, key)
+        Self::setup(Connection::open_in_memory()?, key, Durability::Memory)
     }
 
-    fn setup(mut conn: Connection, key: &DatabaseKey) -> Result<Self, Error> {
+    fn setup(
+        mut conn: Connection,
+        key: &DatabaseKey,
+        durability: Durability,
+    ) -> Result<Self, Error> {
         conn.execute_batch(&key.pragma())?;
         // Pin the format so a future SQLCipher major still opens these files.
         conn.execute_batch("PRAGMA cipher_compatibility = 4;")?;
@@ -103,10 +131,12 @@ impl Store {
             // Only takes effect before the first table exists.
             conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
         }
+        let journal: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        if durability == Durability::File && !journal.eq_ignore_ascii_case("wal") {
+            return Err(Error::JournalMode(journal));
+        }
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA foreign_keys = ON;
+            "PRAGMA synchronous = NORMAL;
              PRAGMA temp_store = MEMORY;",
         )?;
         migrate::run(&mut conn, migrate::USER)?;
@@ -120,9 +150,16 @@ impl Store {
             .optional()?;
         if exists.is_none() {
             let node = getrandom::u32().map_err(Error::Random)? & 0x7fff_ffff;
+            let mut user_key = zeroize::Zeroizing::new([0_u8; 32]);
+            getrandom::fill(user_key.as_mut_slice()).map_err(Error::Random)?;
             conn.execute(
-                "INSERT INTO sync_state (k, device_id, node, hlc_last) VALUES (1, ?1, ?2, 0)",
-                (Uuid::now_v7().as_bytes().as_slice(), node),
+                "INSERT INTO sync_state (k, device_id, node, user_key, hlc_last)
+                 VALUES (1, ?1, ?2, ?3, 0)",
+                (
+                    Uuid::now_v7().as_bytes().as_slice(),
+                    node,
+                    user_key.as_slice(),
+                ),
             )?;
         }
         Ok(())
@@ -136,11 +173,23 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (node, last, local_seq, offset): (i64, i64, i64, i64) = tx.query_row(
-            "SELECT node, hlc_last, local_seq, server_offset_ms FROM sync_state WHERE k = 1",
+        let (node, last, local_seq, offset, read_only): (i64, i64, i64, i64, bool) = tx.query_row(
+            "SELECT node, hlc_last, local_seq, server_offset_ms, read_only
+                 FROM sync_state WHERE k = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )?;
+        if read_only {
+            return Err(Error::ReadOnly);
+        }
         let now_millis = jiff::Timestamp::now().as_millisecond();
         let wall = u64::try_from(now_millis.saturating_add(offset)).unwrap_or(0);
         let hlc = Hlc::from_raw(u64::try_from(last).unwrap_or(0)).tick(wall);
