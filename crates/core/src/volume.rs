@@ -110,6 +110,11 @@ impl MuscleVolume {
         Muscle::ALL.into_iter().zip(self.by_muscle)
     }
 
+    /// Replace the load on `muscle` (rebuilding a cached report).
+    pub const fn set(&mut self, muscle: Muscle, volume: SideVolume) {
+        self.by_muscle[muscle.index()] = volume;
+    }
+
     fn credit(&mut self, muscle: Muscle, side: Side, amount: SetEquivalents) {
         self.by_muscle[muscle.index()].credit(side, amount);
     }

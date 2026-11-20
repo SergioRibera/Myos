@@ -32,6 +32,24 @@ impl SetEquivalents {
     pub const fn mean(self, other: Self) -> Self {
         Self(f64::midpoint(self.0, other.0))
     }
+
+    /// Thousandths, rounded: the integer form caches store.
+    #[must_use]
+    pub fn to_milli(self) -> i64 {
+        // Volumes are small (hundreds of sets): far inside i64.
+        #[expect(clippy::cast_possible_truncation, reason = "bounded domain values")]
+        let milli = (self.0 * 1_000.0).round() as i64;
+        milli
+    }
+
+    /// From thousandths.
+    #[must_use]
+    pub fn from_milli(milli: i64) -> Self {
+        // Exact for any realistic cached value (< 2^53).
+        #[expect(clippy::cast_precision_loss, reason = "bounded domain values")]
+        let value = milli as f64 / 1_000.0;
+        Self(value)
+    }
 }
 
 impl Add for SetEquivalents {
