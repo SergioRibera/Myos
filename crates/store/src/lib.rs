@@ -9,6 +9,7 @@ mod hlc;
 mod key;
 mod migrate;
 mod sync;
+pub mod tlv;
 mod training;
 
 use std::path::Path;
