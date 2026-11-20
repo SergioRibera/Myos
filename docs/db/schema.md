@@ -123,8 +123,6 @@ CREATE TABLE sync_outbox (
   row_id       BLOB NOT NULL CHECK (length(row_id) = 16),
   op           INTEGER NOT NULL CHECK (op BETWEEN 1 AND 3),   -- upsert, delete, restore
   hlc          INTEGER NOT NULL,
-  payload_ver  INTEGER NOT NULL,
-  payload      BLOB,                                          -- TLV; NULL for delete
   state        INTEGER NOT NULL DEFAULT 0 CHECK (state BETWEEN 0 AND 2),  -- pending, in_flight, failed
   attempts     INTEGER NOT NULL DEFAULT 0,
   error_code   INTEGER,                                       -- never a message (no PII)
@@ -145,7 +143,9 @@ CREATE TABLE sync_quarantine (        -- rows this version cannot decode yet
 ) STRICT;
 ```
 
-Coalescing updates the pending row in place (keeps `seq`). Ack deletes by
+The payload is built from the row when pushing, so a coalesced entry always
+sends the latest state. Coalescing updates the pending row in place (keeps
+`seq`). Ack deletes by
 `op_id` only.
 
 ### 4.2 Profile and preferences (singletons, per-field LWW)
