@@ -13,6 +13,9 @@ use crate::exercise::ExerciseId;
 use crate::id::Id;
 use crate::units::{Distance, HeartRate, Mass};
 
+/// Identifier of a logged set.
+pub type SetId = Id<SetRecord>;
+
 /// Identifier of a [`Session`].
 pub type SessionId = Id<Session>;
 
@@ -64,6 +67,22 @@ impl Rpe {
     #[must_use]
     pub fn get(self) -> f64 {
         f64::from(self.half_points) / 2.0
+    }
+
+    /// From half points (`2 ..= 20` for RPE 1 ..= 10).
+    #[must_use]
+    pub const fn from_half_points(half_points: u8) -> Option<Self> {
+        if half_points >= 2 && half_points <= 20 {
+            Some(Self { half_points })
+        } else {
+            None
+        }
+    }
+
+    /// Half points, for storage.
+    #[must_use]
+    pub const fn half_points(self) -> u8 {
+        self.half_points
     }
 }
 
@@ -233,15 +252,35 @@ pub struct Session {
     pub sets: Vec<SetRecord>,
 }
 
-crate::code::codes!(SetKind {
+crate::codes!(SetKind {
     Warmup = 1,
     Working = 2,
     Failure = 3,
     Drop = 4,
 });
 
-crate::code::codes!(Side {
+crate::codes!(Side {
     Both = 1,
     Left = 2,
     Right = 3,
+});
+
+/// How a session was created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionOrigin {
+    /// Logged by hand.
+    Manual,
+    /// Started from a routine.
+    Routine,
+    /// Imported from a file (CSV export of another app, spreadsheet).
+    Import,
+    /// Imported from a wearable or health platform.
+    Wearable,
+}
+
+crate::codes!(SessionOrigin {
+    Manual = 1,
+    Routine = 2,
+    Import = 3,
+    Wearable = 4,
 });

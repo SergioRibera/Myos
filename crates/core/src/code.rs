@@ -17,6 +17,7 @@ pub trait Code: Sized + Copy {
 /// Implements [`Code`] from a `Variant = code` table. `code` is an exhaustive
 /// match (a new variant without a code does not compile) and a duplicated code
 /// is an unreachable pattern in `from_code`.
+#[macro_export]
 macro_rules! codes {
     ($ty:ty { $($variant:ident = $code:literal),+ $(,)? }) => {
         impl $crate::code::Code for $ty {
@@ -35,5 +36,3 @@ macro_rules! codes {
         }
     };
 }
-
-pub(crate) use codes;

@@ -204,4 +204,4 @@ impl LoadModel {
     }
 }
 
-crate::code::codes!(LoadModel { WeightedV1 = 1 });
+crate::codes!(LoadModel { WeightedV1 = 1 });

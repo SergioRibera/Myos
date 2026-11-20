@@ -55,7 +55,7 @@ impl ExerciseLookup for [Exercise] {
     }
 }
 
-crate::code::codes!(Modality {
+crate::codes!(Modality {
     Strength = 1,
     Calisthenics = 2,
     Cardio = 3,

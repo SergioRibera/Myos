@@ -5,7 +5,7 @@ use myos_core::code::Code;
 use myos_core::exercise::Modality;
 use myos_core::load::LoadModel;
 use myos_core::muscle::{Muscle, MuscleRole};
-use myos_core::session::{SetKind, Side};
+use myos_core::session::{SessionOrigin, SetKind, Side};
 use myos_core::strength::OneRepMaxFormula;
 
 fn pinned<T: Code + PartialEq + std::fmt::Debug>(table: &[(T, u16)]) {
@@ -56,4 +56,14 @@ fn muscle_codes() {
     for muscle in Muscle::ALL {
         assert_eq!(Muscle::from_code(muscle.code()), Some(muscle));
     }
+}
+
+#[test]
+fn session_origin_codes() {
+    pinned(&[
+        (SessionOrigin::Manual, 1),
+        (SessionOrigin::Routine, 2),
+        (SessionOrigin::Import, 3),
+        (SessionOrigin::Wearable, 4),
+    ]);
 }

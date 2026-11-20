@@ -184,7 +184,7 @@ impl MuscleTarget {
 
 // Muscle codes leave room per region for subzones (muscle heads), which get
 // codes inside their parent's hundred block.
-crate::code::codes!(Muscle {
+crate::codes!(Muscle {
     Neck = 100,
     Trapezius = 200,
     FrontDeltoids = 300,
@@ -206,7 +206,7 @@ crate::code::codes!(Muscle {
     Soleus = 1900,
 });
 
-crate::code::codes!(MuscleRole {
+crate::codes!(MuscleRole {
     Primary = 1,
     Secondary = 2,
     Stabilizer = 3,
