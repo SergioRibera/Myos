@@ -140,3 +140,53 @@ fn stroke_codes() {
         (Stroke::Kick, 6),
     ]);
 }
+
+#[test]
+fn diet_and_routine_codes() {
+    use myos_core::diet::{MealSlot, Nutrient, PortionSize, ProteinLevel};
+    use myos_core::routine::{BlockKind, FollowMode, Progression};
+    pinned(&[
+        (Nutrient::Energy, 1),
+        (Nutrient::Protein, 2),
+        (Nutrient::Carbohydrate, 3),
+        (Nutrient::Fat, 4),
+        (Nutrient::Fiber, 5),
+        (Nutrient::Sugar, 6),
+        (Nutrient::SaturatedFat, 7),
+        (Nutrient::Sodium, 8),
+    ]);
+    pinned(&[
+        (MealSlot::Breakfast, 1),
+        (MealSlot::Lunch, 2),
+        (MealSlot::Dinner, 3),
+        (MealSlot::Snack, 4),
+        (MealSlot::PreWorkout, 5),
+        (MealSlot::PostWorkout, 6),
+    ]);
+    pinned(&[
+        (PortionSize::Small, 1),
+        (PortionSize::Medium, 2),
+        (PortionSize::Large, 3),
+    ]);
+    pinned(&[
+        (ProteinLevel::Low, 1),
+        (ProteinLevel::Medium, 2),
+        (ProteinLevel::High, 3),
+    ]);
+    pinned(&[
+        (FollowMode::Own, 1),
+        (FollowMode::Copy, 2),
+        (FollowMode::Follow, 3),
+    ]);
+    pinned(&[
+        (BlockKind::Single, 1),
+        (BlockKind::Superset, 2),
+        (BlockKind::Circuit, 3),
+    ]);
+    pinned(&[
+        (Progression::None, 1),
+        (Progression::DoubleProgression, 2),
+        (Progression::LinearLoad, 3),
+        (Progression::EffortBased, 4),
+    ]);
+}
