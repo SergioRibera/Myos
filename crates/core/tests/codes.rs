@@ -190,3 +190,46 @@ fn diet_and_routine_codes() {
         (Progression::EffortBased, 4),
     ]);
 }
+
+#[test]
+fn plan_codes() {
+    use myos_core::plan::{
+        CalibrationProtocol as C, EventKind as E, EventPriority as P, PhaseKind as K,
+        Response as R, ResponseReason as W, SuggestionKind as S,
+    };
+    pinned(&[
+        (K::Calibration, 1),
+        (K::Accumulation, 2),
+        (K::Deload, 3),
+        (K::Intensification, 4),
+        (K::Taper, 5),
+    ]);
+    pinned(&[
+        (E::Fight, 1),
+        (E::Race, 2),
+        (E::Competition, 3),
+        (E::Test, 4),
+        (E::Other, 5),
+    ]);
+    pinned(&[(P::Low, 1), (P::Medium, 2), (P::High, 3)]);
+    pinned(&[
+        (C::WorkingLoad, 1),
+        (C::RepsTest, 2),
+        (C::Endurance, 3),
+        (C::Mobility, 4),
+    ]);
+    pinned(&[
+        (S::Deficit, 1),
+        (S::Excess, 2),
+        (S::Imbalance, 3),
+        (S::Deload, 4),
+        (S::Exercise, 5),
+    ]);
+    pinned(&[(R::Accepted, 1), (R::Ignored, 2), (R::NotApplicable, 3)]);
+    pinned(&[
+        (W::Injury, 1),
+        (W::TrainedElsewhere, 2),
+        (W::NotMyGoal, 3),
+        (W::Other, 4),
+    ]);
+}

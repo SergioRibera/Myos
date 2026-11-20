@@ -9,6 +9,7 @@
 //! - [`body`]: body measurements.
 //! - [`diet`]: meals, foods and nutrients.
 //! - [`routine`]: routine templates and their versions.
+//! - [`plan`]: phases, events, calibration and suggestions.
 //! - [`code`]: stable storage codes for the enums above.
 //! - [`load`]: weighted load (versioned), the per-set metric behind the map.
 //! - [`strength`]: estimated one-rep max.
@@ -21,6 +22,7 @@ pub mod exercise;
 pub mod id;
 pub mod load;
 pub mod muscle;
+pub mod plan;
 pub mod profile;
 pub mod routine;
 pub mod session;
