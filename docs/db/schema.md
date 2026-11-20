@@ -565,3 +565,13 @@ CREATE TABLE routine_item_index (version_id BLOB, item_id BLOB, exercise_id BLOB
 7. `failed` outbox rows are permanent and shown to the user; the rest of the
    queue keeps flowing; transient errors back off with jitter.
 8. Account deleted → push answers 410 → device wipes.
+
+## 9. Product rules that shape the data
+
+- Accounts are optional. Without one, data lives only on the device; the app
+  offers an encrypted export file (`.myos`, password-derived key, Argon2id)
+  that the user stores anywhere and can import on a new device. With an
+  account, a new device restores from the server.
+- Minimum age 16; no parental-consent flow.
+- Professionals read client data online only (server-side, audited); their
+  own notes, routines and plans work offline.
