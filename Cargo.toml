@@ -34,6 +34,9 @@ log   = "0.4"
 # so `istmo::runtime!()` wires the clients and the native projects get
 # the backends without further setup.
 istmo-share           = "0.1.1-alpha.6"
+myos-store = { path = "crates/store" }
+myos-vault = { path = "crates/vault" }
+thiserror = "2.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.14"

@@ -9,6 +9,7 @@ let
   crates = [
     "myos-core"
     "myos-store"
+    "myos-vault"
   ];
   packageFlags = lib.concatMap (name: [
     "-p"
