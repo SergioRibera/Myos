@@ -29,8 +29,10 @@ let
         ../istmo.toml
         ../src
         # Workspace members: cargo resolves every manifest, and the app links
-        # the core and store crates.
+        # the core, store and vault crates.
         ../crates
+        # `[app.icon]` in istmo.toml: build.rs reads the icons.
+        ../brand/app-icon
       ]
       ++ lib.optional (builtins.pathExists ../assets) ../assets
     );
