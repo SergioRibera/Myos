@@ -1,0 +1,43 @@
+[package]
+name = "myos-vault"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Myos database key storage in the platform credential store"
+publish = false
+
+[dependencies]
+# Platform credential stores behind one API; each target links only its own.
+keyring-core = "1.1"
+myos-store = { path = "../store" }
+thiserror = "2.0"
+zeroize = "1.9"
+
+[lints.rust]
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+unwrap_used = "deny"
+allow_attributes_without_reason = "deny"
+redundant_pub_crate = "allow"
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+# Pure-Rust D-Bus and crypto: no libdbus or OpenSSL needed.
+zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+apple-native-keyring-store = "1.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1.0"
