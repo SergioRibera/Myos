@@ -39,3 +39,6 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 unwrap_used = "deny"
 allow_attributes_without_reason = "deny"
+# Contradicts rustc `unreachable_pub`, which asks for `pub(crate)` on items
+# of private modules.
+redundant_pub_crate = "allow"
