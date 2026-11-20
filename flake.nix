@@ -150,6 +150,8 @@
         // nativeBundles
         // windowsBundles;
 
+        checks = import ./nix/checks.nix { inherit pkgs lib app; };
+
         apps.matrix = {
           type = "app";
           program = toString (pkgs.writeShellScript "matrix" "echo '${matrix}'");

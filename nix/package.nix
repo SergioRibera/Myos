@@ -28,6 +28,9 @@ let
         ../build.rs
         ../istmo.toml
         ../src
+        # Workspace members: cargo resolves every manifest, and the app links
+        # the core and store crates.
+        ../crates
       ]
       ++ lib.optional (builtins.pathExists ../assets) ../assets
     );
