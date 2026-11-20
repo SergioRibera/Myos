@@ -43,7 +43,8 @@ Rules:
   `fullBackupContent`; iOS `isExcludedFromBackup`). Opening with a wrong or
   missing key (`SQLITE_NOTADB`) routes to recovery (server restore or
   encrypted export import), never a crash.
-- `PRAGMA temp_store = MEMORY` + `SQLITE_TEMP_STORE=3`; `VACUUM INTO` and
+- `PRAGMA temp_store = MEMORY` (the bundled `SQLCipher` build sets
+  `SQLITE_TEMP_STORE=2`, which honours the pragma); `VACUUM INTO` and
   any plaintext export of `user.db` are forbidden.
 - Logout: checkpoint, close, delete `user.db*` and `derived.db*`, drop the
   key.
@@ -53,12 +54,15 @@ Rules:
 ## 3. Device conventions
 
 - Every table `STRICT`. Large synced tables `WITHOUT ROWID`.
-- Ids: 16-byte UUID v7 `BLOB`, `CHECK (length(id) = 16)`. Singletons and
-  natural keys use **deterministic ids** (UUID v8 of
-  `HMAC(user_key, table ‖ natural key)`) so two devices converge on one row.
-  Before an account exists, `user_key` is a device-local random key; on first
-  login the server returns the account key and local singleton ids are
-  rewritten once.
+- Ids: 16-byte UUID `BLOB`, `CHECK (length(id) = 16)`; v7 for created rows.
+  Singletons (`profile`, `preferences`) use fixed v8 ids: the server keys
+  rows by user, so every device already agrees. Natural keys
+  (`profile_goal` by start day, `external_activity`, `volume_range_override`)
+  use **deterministic ids**: UUID v8 of
+  `HMAC-SHA256(user_key, entity code (u16 BE) ‖ (len u32 BE ‖ part)*)`.
+  Before an account exists, `user_key` is a device-local random key
+  (`sync_state.user_key`); on first login the server returns the account
+  key, natural-key ids are rewritten once and `id_epoch` bumps.
 - Instants: `INTEGER` Unix ms UTC (`*_at`) + `tz_offset_min` where a local
   day matters.
 - Local day: `INTEGER` days since 1970-01-01, `CHECK (day BETWEEN 0 AND 73000)`.
@@ -66,10 +70,11 @@ Rules:
 - Units: suffix is the SI unit of the stored integer: `_g`, `_mg`, `_ug`,
   `_j` (energy, integer joules), `_m`, `_mm`, `_dmm` (0.1 mm), `_ms`,
   `_bpm`, `_bp` (basis points 0..=10000), `_milli` (set equivalents × 1000).
-- Enums: `INTEGER` codes, explicit `#[repr(u8)]` discriminants in Rust,
-  0 = unspecified, append-only, never reused. **No `IN (...)` CHECK** on
-  growable enums — `CHECK (x BETWEEN 0 AND 255)` only; Rust decodes unknown
-  codes to `Unknown(u8)` and round-trips them.
+- Enums: `INTEGER` codes from `myos_core::code::Code` (`u16`), pinned by
+  tests, 0 = unspecified, append-only, never reused. **No `IN (...)` CHECK**
+  on growable enums — range checks only. The row keeps the raw integer;
+  Rust decodes an unknown code to `None` and leaves the row out of reads
+  (counted as undecodable) instead of failing.
 - Text: `CHECK (length(x) <= N)` on every text column.
 - FKs: `DEFERRABLE INITIALLY DEFERRED` inside an aggregate; **no FK between
   sync roots** (children may arrive before parents). Visibility rule: a row is
@@ -110,10 +115,13 @@ CREATE TABLE sync_state (
   device_id        BLOB NOT NULL CHECK (length(device_id) = 16),
   node             INTEGER NOT NULL,
   user_id          BLOB CHECK (user_id IS NULL OR length(user_id) = 16),
+  user_key         BLOB NOT NULL CHECK (length(user_key) = 32),  -- natural-key ids
+  id_epoch         INTEGER NOT NULL DEFAULT 0,
   hlc_last         INTEGER NOT NULL,
   server_offset_ms INTEGER NOT NULL DEFAULT 0,
   local_seq        INTEGER NOT NULL DEFAULT 0,
-  proto            INTEGER NOT NULL
+  proto            INTEGER NOT NULL DEFAULT 1,
+  read_only        INTEGER NOT NULL DEFAULT 0 CHECK (read_only IN (0, 1))  -- server needs a newer app
 ) STRICT;
 
 CREATE TABLE sync_outbox (
@@ -126,6 +134,7 @@ CREATE TABLE sync_outbox (
   state        INTEGER NOT NULL DEFAULT 0 CHECK (state BETWEEN 0 AND 2),  -- pending, in_flight, failed
   attempts     INTEGER NOT NULL DEFAULT 0,
   error_code   INTEGER,                                       -- never a message (no PII)
+  next_attempt_at INTEGER,                                    -- backoff
   created_at   INTEGER NOT NULL
 ) STRICT;
 CREATE UNIQUE INDEX sync_outbox_pending ON sync_outbox(entity, row_id) WHERE state = 0;
@@ -183,13 +192,12 @@ CREATE TABLE preferences (
 ### 4.3 Exercise references
 
 ```sql
--- One row per exercise the user ever referenced; single target for FKs from
--- sets / routine items / calibration. Local index, rebuilt from synced rows.
+-- Local index of every exercise referenced, rebuilt from synced rows. The
+-- source follows from the id: catalog ids are UUID v5, user and organization
+-- exercises v7. No foreign key: sets may arrive before their exercise.
 CREATE TABLE exercise_ref (
-  id         BLOB PRIMARY KEY CHECK (length(id) = 16),
-  src        INTEGER NOT NULL CHECK (src BETWEEN 1 AND 3),  -- catalog, custom, organization
-  custom_id  BLOB REFERENCES custom_exercise(id) DEFERRABLE INITIALLY DEFERRED,
-  CHECK ((src = 2) = (custom_id IS NOT NULL))
+  id  BLOB PRIMARY KEY CHECK (length(id) = 16),
+  src INTEGER NOT NULL CHECK (src BETWEEN 0 AND 255)  -- 0 unresolved, 1 catalog, 2 custom
 ) STRICT;
 
 CREATE TABLE custom_exercise (        -- aggregate root, per-row LWW
@@ -556,7 +564,8 @@ CREATE TABLE routine_item_index (version_id BLOB, item_id BLOB, exercise_id BLOB
    transaction with deferred FKs; remote wins when `(hlc, node)` is greater;
    HLC receive rule advances the local clock; a remote win drops the pending
    outbox entry.
-5. Payload: wincode TLV `{payload_ver, [(tag u16, len, bytes)]}`; tags
+5. Payload: TLV `(tag varint · length varint · bytes)*`, LEB128 varints,
+   tags strictly increasing (`crates/store/src/tlv.rs`); tags
    append-only; unknown tags kept in `extra` and sent back unchanged.
    Below `min_proto` a client is read-only until it updates.
 6. Bootstrap / cursor below `horizon` / lost key: read `user_rev.rev = H`,
