@@ -65,3 +65,15 @@ fn measurements_check_range_and_side() {
         Err(MeasurementError::Side)
     );
 }
+
+#[test]
+fn extreme_birth_years_do_not_overflow() {
+    let today = date(2026, 11, 20);
+    for year in [i16::MIN, i16::MAX, 2101] {
+        let profile = Profile {
+            birth_year: Some(year),
+            ..Profile::default()
+        };
+        assert!(profile.validate(today).is_err(), "{year}");
+    }
+}

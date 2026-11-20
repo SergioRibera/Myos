@@ -108,11 +108,11 @@ impl Profile {
         let Some(year) = self.birth_year else {
             return Ok(());
         };
-        let age = today.year() - year;
+        let age = i32::from(today.year()) - i32::from(year);
         if age > 120 || year < 1900 {
             return Err(ProfileError::BirthYear);
         }
-        if age < MIN_AGE {
+        if age < i32::from(MIN_AGE) {
             return Err(ProfileError::TooYoung);
         }
         Ok(())

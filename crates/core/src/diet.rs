@@ -252,3 +252,27 @@ impl Meal {
         }
     }
 }
+
+/// A household portion of a food ("1 taza", "1 unidad").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Portion {
+    /// Label shown to the user.
+    pub label: String,
+    /// Weight of one portion, milligrams.
+    pub grams_mg: u32,
+}
+
+/// A food the user created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomFood {
+    /// Name.
+    pub name: String,
+    /// Brand.
+    pub brand: Option<String>,
+    /// Barcode, if the user scanned one.
+    pub barcode: Option<String>,
+    /// Per-100 g density.
+    pub density: Nutrients,
+    /// Household portions.
+    pub portions: Vec<Portion>,
+}
