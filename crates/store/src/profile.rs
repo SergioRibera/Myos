@@ -40,7 +40,7 @@ fn user_key(tx: &Transaction<'_>) -> Result<Zeroizing<[u8; 32]>, Error> {
     Ok(Zeroizing::new(key))
 }
 
-/// Op for an explicit local write to a natural-key row: a tombstoned row is
+/// Op for an explicit local write to a natural-key row: a tombstoned or new row is
 /// restored on purpose (deletes otherwise win on merge). `table` is one of
 /// this module's literals, never user input.
 fn upsert_op(tx: &Transaction<'_>, table: &'static str, id: Uuid) -> Result<Op, Error> {
@@ -51,10 +51,11 @@ fn upsert_op(tx: &Transaction<'_>, table: &'static str, id: Uuid) -> Result<Op, 
             |row| row.get(0),
         )
         .optional()?;
-    Ok(if deleted == Some(true) {
-        Op::Restore
-    } else {
+    // No local row also restores: the row may exist, tombstoned, on the server.
+    Ok(if deleted == Some(false) {
         Op::Upsert
+    } else {
+        Op::Restore
     })
 }
 

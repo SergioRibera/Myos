@@ -17,6 +17,7 @@ CREATE TABLE custom_food_portion (      -- aggregate member of custom_food
   position  INTEGER NOT NULL CHECK (position >= 0),
   label     TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 80),
   grams_mg  INTEGER NOT NULL CHECK (grams_mg BETWEEN 1 AND 100000000),
+  extra     BLOB,
   PRIMARY KEY (food_id, position)
 ) STRICT, WITHOUT ROWID;
 
@@ -32,12 +33,13 @@ CREATE TABLE recipe_item (              -- aggregate member of recipe
   recipe_id BLOB NOT NULL
     REFERENCES recipe (id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
   position  INTEGER NOT NULL CHECK (position >= 0),
-  food_src  INTEGER NOT NULL CHECK (food_src BETWEEN 1 AND 4),
+  food_src  INTEGER NOT NULL CHECK (food_src BETWEEN 0 AND 255),
   food_id   BLOB CHECK (food_id IS NULL OR length(food_id) = 16),
   barcode   TEXT CHECK (length(barcode) <= 32),
   grams_mg  INTEGER NOT NULL CHECK (grams_mg BETWEEN 1 AND 100000000),
   name      TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
   nutrients BLOB NOT NULL,
+  extra     BLOB,
   PRIMARY KEY (recipe_id, position),
   CHECK ((food_src = 2) = (barcode IS NOT NULL)),
   CHECK ((food_src = 2) = (food_id IS NULL))
@@ -74,7 +76,7 @@ CREATE TABLE meal_item (
   meal_id           BLOB NOT NULL CHECK (length(meal_id) = 16),
   generation        BLOB NOT NULL CHECK (length(generation) = 16),
   position          INTEGER NOT NULL CHECK (position >= 0),
-  food_src          INTEGER NOT NULL CHECK (food_src BETWEEN 1 AND 4),  -- catalog, off, custom, recipe
+  food_src          INTEGER NOT NULL CHECK (food_src BETWEEN 0 AND 255),  -- 1 catalog, 2 off, 3 custom, 4 recipe
   food_id           BLOB CHECK (food_id IS NULL OR length(food_id) = 16),
   barcode           TEXT CHECK (length(barcode) <= 32),
   grams_mg          INTEGER NOT NULL CHECK (grams_mg BETWEEN 1 AND 100000000),
@@ -245,6 +247,7 @@ CREATE TABLE equipment_profile_item (   -- aggregate member of equipment_profile
     REFERENCES equipment_profile (id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
   equipment  INTEGER NOT NULL CHECK (equipment BETWEEN 0 AND 65535),
   max_load_g INTEGER CHECK (max_load_g BETWEEN 0 AND 4000000),
+  extra      BLOB,
   PRIMARY KEY (profile_id, equipment)
 ) STRICT, WITHOUT ROWID;
 

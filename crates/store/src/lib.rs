@@ -13,9 +13,12 @@ mod hlc;
 mod ids;
 mod key;
 mod migrate;
+mod payload;
 mod plan;
 mod profile;
+mod replication;
 mod routines;
+mod spec;
 mod sync;
 pub mod tlv;
 mod training;
@@ -32,6 +35,10 @@ pub use hlc::Hlc;
 pub use key::DatabaseKey;
 pub use plan::Read;
 pub use profile::MeasurementsRead;
+pub use replication::{
+    PAYLOAD_VERSION, PROTO, PullPage, PushBatch, PushOp, PushOutcome, PushResponse, PushResult,
+    RemoteRow, STREAM_OWN, SyncReport, Transport,
+};
 pub use routines::{RoutineSummary, StoredRoutine};
 pub use sync::{Entity, Op, OutboxEntry};
 pub use training::{SessionDraft, SessionsRead, SetsRead, StoredSet};
@@ -83,6 +90,12 @@ pub enum Error {
     /// A value does not fit its stored range.
     #[error("{0} is out of range")]
     OutOfRange(&'static str),
+    /// Sync needs an account (natural-key ids are rewritten when attaching one).
+    #[error("no account attached")]
+    NoAccount,
+    /// The transport failed; queued writes are retried later.
+    #[error("sync transport failed")]
+    Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// A structured column or payload is malformed.
     #[error("malformed record: {0}")]
     Payload(#[from] crate::tlv::TlvError),
@@ -163,6 +176,7 @@ impl Store {
              PRAGMA temp_store = MEMORY;",
         )?;
         migrate::run(&mut conn, migrate::USER)?;
+        Self::recover_in_flight(&mut conn)?;
         Self::init_sync_state(&conn)?;
         derived::attach(&conn, derived, key)?;
         Ok(Self { conn })

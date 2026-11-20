@@ -640,3 +640,29 @@ Where `crates/store` refines or departs from the sections above.
   read transaction. Rows with unknown codes, out-of-range values or invalid
   instants are counted as undecodable, never fatal; body measurements are
   re-validated on read.
+- **Sync client (protocol 1, payload layout 1).**
+  - Payload tags: 1 `deleted_at`, 10.. data columns in `crates/store/src/spec.rs`
+    order (pinned by `tests/golden/payload_tags.txt`, append-only), 999
+    reserved for `field_hlc`, 1000 aggregate members (list of member TLVs,
+    unknown member tags kept in the member's `extra`), > 1000 reserved. An
+    absent tag on a `NOT NULL DEFAULT` column means the default.
+  - Nothing is pushed before `attach_account`, which rewrites natural-key ids
+    with the account key and bumps `id_epoch`.
+  - The first write of a natural-key or singleton row is a `restore` (it may
+    exist tombstoned on the server).
+  - Pull: the server is the authority. A row without an unpushed local change
+    is applied as is; with one, deletes win unless restored, otherwise the
+    greater `(hlc, node)`; the winner drops the local outbox entry. A pulled
+    row equal to the local `(hlc, node)` only records `server_rev`.
+  - Each pulled row is applied in a savepoint; unknown entity, undecodable
+    payload or a failed constraint sends it to `sync_quarantine` (with op,
+    hlc, node) and marks local changes of that row as failed "needs update";
+    the cursor still advances.
+  - Remote applies bump `local_seq`; a row leaving a `day` records it in the
+    local `derived_touched_day` so the derived cache recomputes it.
+  - Clock: offset to the server clamped to ±24 h; remote clocks more than
+    5 min ahead are not adopted. `min_proto > PROTO` sets `read_only` and
+    stops applying pulls until an update clears it.
+  - Transport failures requeue in-flight entries with exponential backoff and
+    jitter (an explicit restore survives the requeue); entries left in flight
+    by a crash are requeued at open.

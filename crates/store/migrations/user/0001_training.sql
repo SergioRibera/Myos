@@ -58,10 +58,20 @@ CREATE TABLE sync_quarantine (
   server_rev  INTEGER NOT NULL,
   entity      INTEGER NOT NULL,
   row_id      BLOB NOT NULL CHECK (length(row_id) = 16),
+  op          INTEGER NOT NULL,
+  hlc         INTEGER NOT NULL,
+  node        INTEGER NOT NULL,
   payload_ver INTEGER NOT NULL,
   payload     BLOB,
   reason      INTEGER NOT NULL,
   PRIMARY KEY (stream, server_rev)
+) STRICT;
+CREATE INDEX sync_quarantine_row ON sync_quarantine (entity, row_id);
+
+-- Days whose derived data must be recomputed although no row on them
+-- changed now (a synced row moved away from them). Local only.
+CREATE TABLE derived_touched_day (
+  day INTEGER PRIMARY KEY
 ) STRICT;
 
 CREATE TABLE profile (
@@ -115,6 +125,7 @@ CREATE TABLE custom_exercise_target (
   muscle      INTEGER NOT NULL CHECK (muscle BETWEEN 0 AND 65535),
   role        INTEGER NOT NULL CHECK (role BETWEEN 0 AND 255),
   weight_bp   INTEGER CHECK (weight_bp BETWEEN 0 AND 10000),
+  extra       BLOB,
   PRIMARY KEY (exercise_id, muscle)
 ) STRICT, WITHOUT ROWID;
 

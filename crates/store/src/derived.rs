@@ -67,6 +67,9 @@ CREATE TABLE derived.week_summary (
 
 const TABLES: [&str; 4] = ["week_summary", "week_volume", "e1rm", "derived_meta"];
 
+/// 1RM formula behind cached estimates; another one rebuilds the cache.
+const FORMULA: OneRepMaxFormula = OneRepMaxFormula::EpleyRirV1;
+
 /// `e1rm.flags` bit: no effort rating, RIR 0 assumed.
 const FLAG_EFFORT_ASSUMED: i64 = 1;
 
@@ -176,7 +179,10 @@ impl<C: ExerciseLookup + ?Sized> ExerciseLookup for Layered<'_, C> {
 struct RunningBest(HashMap<ExerciseId, OneRepMax>);
 
 impl RunningBest {
-    fn offer(&mut self, exercise: ExerciseId, estimate: OneRepMax) {
+    fn offer(&mut self, exercise: ExerciseId, mut estimate: OneRepMax) {
+        // Same precision as cached estimates: incremental and full refreshes
+        // agree at intensity thresholds.
+        estimate.kg = kilograms(grams(estimate.kg));
         self.0
             .entry(exercise)
             .and_modify(|best| {
@@ -239,7 +245,8 @@ impl Store {
         let watermark = meta(conn, "watermark")?;
         let full = watermark.is_none()
             || meta(conn, "model")? != Some(i64::from(model.code()))
-            || meta(conn, "catalog")? != Some(i64::from(catalog_version));
+            || meta(conn, "catalog")? != Some(i64::from(catalog_version))
+            || meta(conn, "formula")? != Some(i64::from(FORMULA.code()));
         let since = if full { -1 } else { watermark.unwrap_or(-1) };
         if !full && since >= current {
             return Ok(RefreshStats::default());
@@ -270,6 +277,7 @@ impl Store {
             ("watermark", current),
             ("model", i64::from(model.code())),
             ("catalog", i64::from(catalog_version)),
+            ("formula", i64::from(FORMULA.code())),
         ];
         self.write_cache(full, &days, &estimates, &weeks, model, &meta)?;
         Ok(stats)
@@ -283,7 +291,9 @@ impl Store {
             "SELECT day FROM set_entry WHERE local_seq > ?1",
             "SELECT day FROM workout_session WHERE local_seq > ?1",
             "SELECT s.day FROM set_entry s JOIN custom_exercise c ON c.id = s.exercise_id
-             WHERE c.local_seq > ?1",
+             WHERE c.local_seq > ?1 AND s.deleted_at IS NULL",
+            // Days a synced row moved away from.
+            "SELECT day FROM derived_touched_day WHERE ?1 = ?1",
         ] {
             let mut statement = self.conn().prepare_cached(sql)?;
             let rows = statement.query_map([since], |row| row.get::<_, i64>(0))?;
@@ -421,9 +431,12 @@ impl Store {
                  DELETE FROM derived.week_summary;",
             )?;
         }
+        tx.execute("DELETE FROM main.derived_touched_day", [])?;
+        let mut delete_day = tx.prepare_cached("DELETE FROM derived.e1rm WHERE day = ?1")?;
         for &day in days {
-            tx.execute("DELETE FROM derived.e1rm WHERE day = ?1", [day])?;
+            delete_day.execute([day])?;
         }
+        drop(delete_day);
         for (exercise, day, estimate, session) in estimates {
             tx.execute(
                 "INSERT INTO derived.e1rm (exercise_id, day, formula, value_g, session_id, flags)
