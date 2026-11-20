@@ -50,7 +50,11 @@ let
   unwrapped = pkgs.rustPlatform.buildRustPackage {
     inherit pname version src;
     cargoLock = { inherit lockFile; };
-    nativeBuildInputs = [ pkgs.pkg-config ];
+    # perl: the vendored OpenSSL behind SQLCipher (myos-store).
+    nativeBuildInputs = [
+      pkgs.pkg-config
+      pkgs.perl
+    ];
     # Plugins with system libraries add theirs here (the camera plugin:
     # `llvmPackages.libclang` for bindgen and `LIBCLANG_PATH`).
     buildInputs =

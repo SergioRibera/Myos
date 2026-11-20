@@ -170,6 +170,8 @@
             libXi
             nodejs
             pnpm
+            # myos-store builds a vendored OpenSSL for SQLCipher.
+            perl
             claude-code
             # Android tooling normally comes from Android Studio / a Docker image;
             # keep this shell focused on desktop dev + cargo.
