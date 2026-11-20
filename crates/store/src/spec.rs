@@ -467,3 +467,16 @@ mod golden {
         assert_eq!(lines, pinned, "payload tags changed; tags are append-only");
     }
 }
+
+#[cfg(test)]
+mod limits {
+    use super::*;
+
+    #[test]
+    fn column_tags_stay_below_the_reserved_range() {
+        for spec in TABLES {
+            let last = TableSpec::tag(spec.columns.len().saturating_sub(1));
+            assert!(last < TAG_FIELD_HLC, "{} reaches reserved tags", spec.table);
+        }
+    }
+}

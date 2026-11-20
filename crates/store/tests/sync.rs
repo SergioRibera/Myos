@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use jiff::Timestamp;
 use jiff::civil::date;
+use myos_core::code::Code;
 use myos_core::exercise::{Exercise, Modality};
 use myos_core::id::Id;
 use myos_core::muscle::{Muscle, MuscleRole, MuscleTarget};
@@ -48,12 +49,19 @@ struct Server {
     receipts: HashMap<Uuid, PushResult>,
     min_proto: u32,
     fail_next_push: bool,
+    /// Entity whose ops the server rejects.
+    reject_entity: Option<u16>,
+    /// Page size the server caps pulls at (0 = no cap).
+    page_size: usize,
 }
 
 impl Server {
     fn apply(&mut self, op: &myos_store::PushOp) -> PushResult {
         if let Some(receipt) = self.receipts.get(&op.op_id) {
             return *receipt;
+        }
+        if self.reject_entity == Some(op.entity) {
+            return PushResult::Rejected { code: 7 };
         }
         let key = (op.entity, op.row_id);
         let incoming_deleted = op.op == OP_DELETE;
@@ -151,8 +159,12 @@ impl Transport for Link {
             })
             .collect();
         rows.sort_by_key(|row| row.server_rev);
-        let more = rows.len() > limit as usize;
-        rows.truncate(limit as usize);
+        let limit = match server.page_size {
+            0 => limit as usize,
+            cap => cap.min(limit as usize),
+        };
+        let more = rows.len() > limit;
+        rows.truncate(limit);
         Ok(PullPage {
             next: rows.last().map_or(after, |row| row.server_rev),
             rows,
@@ -280,6 +292,8 @@ fn newer_edit_wins_on_both_devices() {
     tablet.sync_once(&mut link).unwrap();
 
     phone.update_set(set_id, &set(&bench, 82.5)).unwrap();
+    // Distinct milliseconds: otherwise the node tiebreak picks the winner.
+    std::thread::sleep(std::time::Duration::from_millis(5));
     tablet.update_set(set_id, &set(&bench, 90.0)).unwrap();
     // The tablet wrote last (higher hlc) and syncs second.
     phone.sync_once(&mut link).unwrap();
@@ -421,4 +435,76 @@ fn a_newer_protocol_makes_old_builds_read_only() {
     link.0.borrow_mut().min_proto = myos_store::PROTO;
     assert!(!phone.sync_once(&mut link).unwrap().read_only);
     phone.log_set(id, &set(&bench(), 80.0)).unwrap();
+}
+
+#[test]
+fn a_rejected_local_write_does_not_block_remote_versions() {
+    let (mut phone, mut tablet, mut link) = pair();
+    let bench = bench();
+    let id = session(&mut phone);
+    let set_id = phone.log_set(id, &set(&bench, 80.0)).unwrap();
+    phone.sync_once(&mut link).unwrap();
+    tablet.sync_once(&mut link).unwrap();
+
+    // The server refuses the phone's edit of the set …
+    link.0.borrow_mut().reject_entity = Some(myos_store::Entity::SetEntry.code());
+    phone.update_set(set_id, &set(&bench, 999.0)).unwrap();
+    assert_eq!(phone.sync_once(&mut link).unwrap().rejected, 1);
+    link.0.borrow_mut().reject_entity = None;
+    // … so the tablet's later edit must still reach it.
+    tablet.update_set(set_id, &set(&bench, 85.0)).unwrap();
+    tablet.sync_once(&mut link).unwrap();
+    phone.sync_once(&mut link).unwrap();
+    assert_eq!(
+        phone.sets_of(id).unwrap().sets[0].record.load,
+        Mass::from_kg(85.0)
+    );
+}
+
+#[test]
+fn pulls_page_through_the_feed() {
+    let (mut phone, mut tablet, mut link) = pair();
+    let bench = bench();
+    let id = session(&mut phone);
+    for kg in 1..=7 {
+        phone
+            .log_set(id, &set(&bench, f64::from(kg) * 10.0))
+            .unwrap();
+    }
+    phone.sync_once(&mut link).unwrap();
+    link.0.borrow_mut().page_size = 3;
+    let report = tablet.sync_once(&mut link).unwrap();
+    assert_eq!(report.applied, 8);
+    assert_eq!(tablet.sets_of(id).unwrap().sets.len(), 7);
+}
+
+#[test]
+fn attaching_an_account_rewrites_natural_keys_once() {
+    let mut store = Store::open_in_memory(&DatabaseKey::generate().unwrap()).unwrap();
+    let goal = GoalPeriod {
+        from: date(2026, 1, 1),
+        goal: Goal::Health,
+        level: Level::Beginner,
+    };
+    store.set_goal(goal).unwrap();
+    let before = store.pending_outbox(10).unwrap()[0].row_id;
+    let account = Uuid::now_v7();
+    store.attach_account(account, &ACCOUNT_KEY).unwrap();
+    let after = store.pending_outbox(10).unwrap()[0].row_id;
+    assert_ne!(
+        before, after,
+        "device-key id replaced by the account-key id"
+    );
+    assert_eq!(store.goal_on(date(2026, 2, 1)).unwrap(), Some(goal));
+    // Same account again: nothing changes. Another account: refused.
+    store.attach_account(account, &ACCOUNT_KEY).unwrap();
+    assert_eq!(store.pending_outbox(10).unwrap()[0].row_id, after);
+    assert!(matches!(
+        store.attach_account(Uuid::now_v7(), &[1; 32]),
+        Err(Error::AccountMismatch)
+    ));
+    // A second device of the same account mints the same id.
+    let mut other = device(account);
+    other.set_goal(goal).unwrap();
+    assert_eq!(other.pending_outbox(10).unwrap()[0].row_id, after);
 }

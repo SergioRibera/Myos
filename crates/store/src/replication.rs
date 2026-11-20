@@ -31,6 +31,8 @@ pub const STREAM_OWN: u16 = 1;
 
 /// Largest push batch.
 const PUSH_BATCH: u32 = 500;
+/// Byte budget of one push batch.
+const PUSH_BYTES: usize = 4 * 1024 * 1024;
 /// Largest pull page requested.
 const PULL_PAGE: u32 = 500;
 /// Bound on push / pull rounds in one [`Store::sync_once`].
@@ -196,6 +198,7 @@ struct Local {
     node: i64,
     deleted: bool,
     day: Option<i64>,
+    server_rev: Option<i64>,
 }
 
 fn now_ms() -> i64 {
@@ -267,6 +270,18 @@ impl Store {
     /// rewritten with `account_key` (so every device of the account mints
     /// the same ids), then sync is allowed.
     pub fn attach_account(&mut self, user_id: Uuid, account_key: &[u8; 32]) -> Result<(), Error> {
+        let current: Option<[u8; 16]> =
+            self.conn()
+                .query_row("SELECT user_id FROM sync_state WHERE k = 1", [], |row| {
+                    row.get(0)
+                })?;
+        match current {
+            Some(current) if current == *user_id.as_bytes() => return Ok(()),
+            // Another account's data is on this device: it has to be wiped
+            // (logout) first, never mixed.
+            Some(_) => return Err(Error::AccountMismatch),
+            None => {}
+        }
         let tx = self.conn_mut().transaction()?;
         let rows: Vec<([u8; 16], i64)> = tx
             .prepare("SELECT id, from_day FROM profile_goal")?
@@ -330,10 +345,18 @@ impl Store {
             read_only,
             ..SyncReport::default()
         };
+        // A failing push (rejected batch, server error) must not keep the
+        // device from receiving changes: pull anyway, report the push error.
+        let mut push_error = None;
         if !read_only {
             for _ in 0..MAX_ROUNDS {
-                if !self.push_round(transport, &mut report)? || report.read_only {
-                    break;
+                match self.push_round(transport, &mut report) {
+                    Ok(true) if !report.read_only => {}
+                    Ok(_) => break,
+                    Err(error) => {
+                        push_error = Some(error);
+                        break;
+                    }
                 }
             }
         }
@@ -342,7 +365,7 @@ impl Store {
                 break;
             }
         }
-        Ok(report)
+        push_error.map_or(Ok(report), Err)
     }
 
     /// One push batch; `false` when nothing was pending.
@@ -381,6 +404,8 @@ impl Store {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let tx = self.conn_mut().transaction()?;
+        // Anything still in flight here was left by a failed acknowledgement.
+        requeue_in_flight(&tx, None)?;
         let entries: Vec<Entry> = tx
             .prepare_cached(
                 "SELECT seq, op_id, entity, row_id, op, hlc FROM sync_outbox
@@ -402,6 +427,7 @@ impl Store {
             return Ok(None);
         }
         let mut ops = Vec::with_capacity(entries.len());
+        let mut bytes = 0_usize;
         for (seq, op_id, entity, row_id, op, hlc) in entries {
             let row_id = Uuid::from_bytes(row_id);
             let spec = u16::try_from(entity)
@@ -417,6 +443,11 @@ impl Store {
                 tx.execute("DELETE FROM sync_outbox WHERE seq = ?1", [seq])?;
                 continue;
             };
+            // Byte budget: the rest waits for the next round.
+            if !ops.is_empty() && bytes + payload.len() > PUSH_BYTES {
+                break;
+            }
+            bytes += payload.len();
             tx.execute("UPDATE sync_outbox SET state = 1 WHERE seq = ?1", [seq])?;
             ops.push(PushOp {
                 op_id: Uuid::from_bytes(op_id),
@@ -483,8 +514,8 @@ impl Store {
                 }
             }
         }
-        // Ops the server did not answer go back to the queue.
-        requeue_in_flight(&tx, None)?;
+        // Ops the server did not answer go back to the queue, with backoff.
+        requeue_in_flight(&tx, Some(0))?;
         update_clock(
             &tx,
             response.server_time_ms,
@@ -537,11 +568,13 @@ impl Store {
                     report.applied += 1;
                 }
                 Ok(false) => savepoint.commit()?,
-                Err(reason) => {
+                Err(ApplyError::Quarantine(reason)) => {
                     drop(savepoint);
                     quarantine(&tx, row, reason)?;
                     report.quarantined += 1;
                 }
+                // The page is rolled back and the cursor stays: retried later.
+                Err(ApplyError::Fatal(error)) => return Err(error),
             }
         }
         receive_clock(&tx, newest)?;
@@ -569,7 +602,9 @@ fn update_clock(
     report: &mut SyncReport,
 ) -> Result<(), Error> {
     let midpoint = sent_ms + (now_ms() - sent_ms) / 2;
-    let offset = (server_time_ms - midpoint).clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS);
+    let offset = server_time_ms
+        .saturating_sub(midpoint)
+        .clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS);
     report.read_only = min_proto > PROTO;
     tx.execute(
         "UPDATE sync_state SET server_offset_ms = ?1, read_only = ?2 WHERE k = 1",
@@ -598,44 +633,84 @@ fn receive_clock(tx: &Transaction<'_>, remote: u64) -> Result<(), Error> {
     Ok(())
 }
 
+/// Why a remote row was not written.
+enum ApplyError {
+    /// This build cannot store it: set it aside, keep going.
+    Quarantine(i64),
+    /// The database failed (busy, I/O, …): abort the page, keep the cursor.
+    Fatal(Error),
+}
+
+impl From<rusqlite::Error> for ApplyError {
+    fn from(error: rusqlite::Error) -> Self {
+        // Only a row the schema refuses is quarantined; anything else is the
+        // database failing, and skipping the row would lose it.
+        if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+            Self::Quarantine(CONSTRAINT)
+        } else {
+            Self::Fatal(Error::Sqlite(error))
+        }
+    }
+}
+
+impl From<Error> for ApplyError {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Sqlite(error) => error.into(),
+            Error::Payload(_) => Self::Quarantine(UNDECODABLE),
+            other => Self::Fatal(other),
+        }
+    }
+}
+
 /// Write a remote row when the rules say so. `Ok(false)`: kept the local
-/// version. `Err(reason)`: quarantine.
-fn apply_remote(conn: &Connection, row: &RemoteRow, local_seq: &mut i64) -> Result<bool, i64> {
+/// version.
+fn apply_remote(
+    conn: &Connection,
+    row: &RemoteRow,
+    local_seq: &mut i64,
+) -> Result<bool, ApplyError> {
     let spec = Entity::from_code(row.entity)
         .and_then(spec::of)
-        .ok_or(UNKNOWN_ENTITY)?;
-    let columns = Columns::of(conn, spec.table).map_err(|_| CONSTRAINT)?;
+        .ok_or(ApplyError::Quarantine(UNKNOWN_ENTITY))?;
+    let columns = Columns::of(conn, spec.table)?;
     let member_columns = match spec.members {
-        Some(members) => Some(Columns::of(conn, members.table).map_err(|_| CONSTRAINT)?),
+        Some(members) => Some(Columns::of(conn, members.table)?),
         None => None,
     };
-    let decoded = payload::decode(&row.payload, spec, &columns, member_columns.as_ref())
-        .map_err(|_| UNDECODABLE)?;
-    let hlc = i64::try_from(row.hlc).map_err(|_| UNDECODABLE)?;
-    let remote_op = Op::from_code(row.op).ok_or(UNDECODABLE)?;
+    let decoded = payload::decode(&row.payload, spec, &columns, member_columns.as_ref())?;
+    let hlc = i64::try_from(row.hlc).map_err(|_| ApplyError::Quarantine(UNDECODABLE))?;
+    let remote_op = Op::from_code(row.op).ok_or(ApplyError::Quarantine(UNDECODABLE))?;
     let remote_deleted = !matches!(decoded.deleted_at, Value::Null);
 
-    let local = read_local(conn, spec, row.row_id).map_err(|_| CONSTRAINT)?;
+    let local = read_local(conn, spec, row.row_id)?;
+    // Failed entries (rejected, needs update) do not compete: the server
+    // refused them or this build cannot see the newer row.
     let pending: Option<i64> = conn
         .query_row(
-            "SELECT op FROM sync_outbox WHERE entity = ?1 AND row_id = ?2
+            "SELECT op FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state < 2
              ORDER BY state = 0 DESC, seq DESC LIMIT 1",
             params![row.entity, row.row_id.as_bytes().as_slice()],
             |row| row.get(0),
         )
-        .optional()
-        .map_err(|_| CONSTRAINT)?;
+        .optional()?;
 
-    if let Some(local) = &local
-        && (local.hlc, local.node) == (hlc, row.node)
-    {
-        // Our own write coming back: just record the revision.
-        conn.execute(
-            &format!("UPDATE {} SET server_rev = ?2 WHERE id = ?1", spec.table),
-            params![row.row_id.as_bytes().as_slice(), row.server_rev],
-        )
-        .map_err(|_| CONSTRAINT)?;
-        return Ok(false);
+    if let Some(local) = &local {
+        if (local.hlc, local.node) == (hlc, row.node) {
+            // Our own write coming back: just record the revision.
+            conn.execute(
+                &format!("UPDATE {} SET server_rev = ?2 WHERE id = ?1", spec.table),
+                params![row.row_id.as_bytes().as_slice(), row.server_rev],
+            )?;
+            return Ok(false);
+        }
+        if local
+            .server_rev
+            .is_some_and(|known| row.server_rev <= known)
+        {
+            // An older revision than the one already applied.
+            return Ok(false);
+        }
     }
 
     if let (Some(local), Some(pending)) = (&local, pending) {
@@ -652,7 +727,7 @@ fn apply_remote(conn: &Connection, row: &RemoteRow, local_seq: &mut i64) -> Resu
     }
 
     *local_seq += 1;
-    let has_field_hlc = columns_has(conn, spec.table, "field_hlc").map_err(|_| CONSTRAINT)?;
+    let has_field_hlc = columns_has(conn, spec.table, "field_hlc")?;
     payload::write(
         conn,
         spec,
@@ -665,14 +740,17 @@ fn apply_remote(conn: &Connection, row: &RemoteRow, local_seq: &mut i64) -> Resu
             local_seq: *local_seq,
         },
         has_field_hlc,
-    )
-    .map_err(|_| CONSTRAINT)?;
-    // The remote version wins: unpushed local changes of the row are moot.
+    )?;
+    // The remote version wins: unpushed local changes of the row are moot,
+    // and older quarantined versions of it must never be replayed.
     conn.execute(
-        "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2",
+        "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state < 2",
         params![row.entity, row.row_id.as_bytes().as_slice()],
-    )
-    .map_err(|_| CONSTRAINT)?;
+    )?;
+    conn.execute(
+        "DELETE FROM sync_quarantine WHERE entity = ?1 AND row_id = ?2 AND server_rev < ?3",
+        params![row.entity, row.row_id.as_bytes().as_slice(), row.server_rev],
+    )?;
     // Derived data of the day the row left.
     if let Some(old_day) = local.and_then(|local| local.day)
         && decoded.value(spec, "day") != Some(&Value::Integer(old_day))
@@ -680,8 +758,7 @@ fn apply_remote(conn: &Connection, row: &RemoteRow, local_seq: &mut i64) -> Resu
         conn.execute(
             "INSERT OR IGNORE INTO derived_touched_day (day) VALUES (?1)",
             [old_day],
-        )
-        .map_err(|_| CONSTRAINT)?;
+        )?;
     }
     if let Some(Value::Blob(exercise)) = match spec.entity {
         Entity::SetEntry => decoded.value(spec, "exercise_id").cloned(),
@@ -696,8 +773,7 @@ fn apply_remote(conn: &Connection, row: &RemoteRow, local_seq: &mut i64) -> Resu
         conn.execute(
             "INSERT INTO exercise_ref (id, src) VALUES (?1, ?2) ON CONFLICT (id) DO NOTHING",
             params![exercise, source],
-        )
-        .map_err(|_| CONSTRAINT)?;
+        )?;
     }
     Ok(true)
 }
@@ -713,7 +789,7 @@ fn columns_has(conn: &Connection, table: &str, column: &str) -> Result<bool, Err
 fn read_local(conn: &Connection, spec: &TableSpec, id: Uuid) -> Result<Option<Local>, Error> {
     let has_day = spec.columns.contains(&"day");
     let sql = format!(
-        "SELECT hlc, node, deleted_at IS NOT NULL, {} FROM {} WHERE id = ?1",
+        "SELECT hlc, node, deleted_at IS NOT NULL, {}, server_rev FROM {} WHERE id = ?1",
         if has_day { "day" } else { "NULL" },
         spec.table
     );
@@ -724,6 +800,7 @@ fn read_local(conn: &Connection, spec: &TableSpec, id: Uuid) -> Result<Option<Lo
                 node: row.get(1)?,
                 deleted: row.get(2)?,
                 day: row.get(3)?,
+                server_rev: row.get(4)?,
             })
         })
         .optional()?)

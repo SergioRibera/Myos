@@ -93,6 +93,9 @@ pub enum Error {
     /// Sync needs an account (natural-key ids are rewritten when attaching one).
     #[error("no account attached")]
     NoAccount,
+    /// The device already holds another account's data.
+    #[error("another account is attached")]
+    AccountMismatch,
     /// The transport failed; queued writes are retried later.
     #[error("sync transport failed")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
