@@ -5,6 +5,7 @@ use freya::prelude::*;
 use super::Action;
 use super::press::use_press;
 use crate::icon::{Icon, IconName};
+use crate::motion::use_press_fill;
 use crate::theme::use_theme;
 use crate::tokens::{Palette, Radius, Space, TextRole, TextRoleExt};
 
@@ -112,7 +113,7 @@ impl Component for AlertCard {
             .cross_align(Alignment::Center)
             .spacing(Space::MD)
             .corner_radius(Radius::ALERT)
-            .background(fill)
+            .background(use_press_fill(fill))
             .border(press.focus_border(palette.accent, true))
             .child(
                 rect()

@@ -5,6 +5,7 @@ use freya::prelude::*;
 use super::Action;
 use super::button::Button;
 use crate::icon::{Icon, IconName};
+use crate::motion::use_fade_on_change;
 use crate::theme::use_theme;
 use crate::tokens::{Radius, Space, Stroke, TextRole, TextRoleExt};
 
@@ -186,6 +187,7 @@ impl Component for SuggestionCard {
     fn render(&self) -> impl IntoElement {
         let palette = use_theme().palette;
         let dismissed = self.state == SuggestionState::Dismissed;
+        let reveal = use_fade_on_change(&(self.state == SuggestionState::Explained), 0.);
         let tag = rect()
             .height(Size::px(24.))
             .padding((0., Space::SM))
@@ -233,6 +235,7 @@ impl Component for SuggestionCard {
                 rect()
                     .width(Size::fill())
                     .padding(11.)
+                    .opacity(reveal)
                     .corner_radius(Radius::TILE)
                     .background(palette.ground)
                     .child(

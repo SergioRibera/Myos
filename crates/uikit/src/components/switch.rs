@@ -2,7 +2,9 @@ use freya::prelude::*;
 
 use super::Action;
 use super::press::use_press;
+use crate::motion::{use_color_transition, use_number_transition};
 use crate::theme::use_theme;
+use crate::tokens::Motion;
 
 /// On / off toggle (Penpot component `Switch`). The caller owns the value
 /// and flips it in [`Self::on_toggle`].
@@ -48,17 +50,17 @@ impl Component for Switch {
         } else {
             (palette.surface_sunken, palette.ink_subtle)
         };
+        let track = use_color_transition(track, Motion::FAST);
+        let knob = use_color_transition(knob, Motion::FAST);
+        // Travel: 48 track − 2 × 3 padding − 22 knob.
+        let offset = use_number_transition(if self.on { 20. } else { 0. }, Motion::FAST);
         let body = rect()
             .width(Size::px(48.))
             .height(Size::px(28.))
             .padding(3.)
             .horizontal()
             .cross_align(Alignment::Center)
-            .main_align(if self.on {
-                Alignment::End
-            } else {
-                Alignment::Start
-            })
+            .offset_x(offset)
             .corner_radius(14.)
             .background(track)
             .border(press.focus_border(palette.accent, false))

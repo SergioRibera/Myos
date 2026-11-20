@@ -7,6 +7,7 @@ mod outlines;
 use freya::engine::prelude::{Canvas, Paint, PaintStyle, Path, PathBuilder, PathEffect};
 use freya::prelude::*;
 
+use crate::motion::use_fade_on_change;
 use crate::theme::use_theme;
 use crate::tokens::{Palette, Stroke};
 
@@ -323,9 +324,13 @@ impl Component for MuscleMap {
             }
         });
         let mut size = use_state(Size2D::default);
+        // "Girar" swaps the drawing in place: a short crossfade keeps it
+        // from flashing.
+        let opacity = use_fade_on_change(&view, 0.3);
         rect()
             .layout(self.layout.clone())
             .background(painter)
+            .opacity(opacity)
             .on_sized(move |e: Event<SizedEventData>| size.set_if_modified(e.area.size))
             .a11y_role(AccessibilityRole::Image)
             .maybe(self.on_region_press.is_some(), |el| {

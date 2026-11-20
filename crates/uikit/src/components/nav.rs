@@ -5,6 +5,7 @@ use freya::prelude::*;
 use super::Action;
 use super::press::use_press;
 use crate::icon::{Icon, IconName};
+use crate::motion::use_press_fill;
 use crate::theme::use_theme;
 use crate::tokens::{Dimen, Space, Stroke, TextRole, TextRoleExt};
 
@@ -161,11 +162,11 @@ impl Component for CenterAction {
             .height(Size::px(Dimen::BUTTON))
             .center()
             .corner_radius(Dimen::BUTTON / 2.)
-            .background(if press.active() {
+            .background(use_press_fill(if press.active() {
                 palette.cta_pressed
             } else {
                 palette.cta
-            })
+            }))
             .border(press.focus_border(palette.accent, false))
             .child(
                 Icon::new(IconName::Plus)
@@ -266,10 +267,11 @@ impl Component for BackButton {
             .height(Size::px(Dimen::TOUCH))
             .center()
             .corner_radius(Dimen::TOUCH / 2.)
-            .map(
-                press.active().then_some(palette.surface_raised),
-                BackgroundExt::background,
-            )
+            .background(use_press_fill(if press.active() {
+                palette.surface_raised
+            } else {
+                palette.surface_raised.with_a(0)
+            }))
             .border(press.focus_border(palette.accent, true))
             .child(Icon::new(IconName::Back).color(palette.ink))
             .a11y_alt(self.name.to_string());

@@ -4,6 +4,7 @@ use freya::prelude::*;
 
 use super::Action;
 use super::press::use_press;
+use crate::motion::use_press_fill;
 use crate::theme::ThemeMode;
 use crate::theme::use_theme;
 use crate::tokens::{Brand, Palette, Radius, Space, Stroke, TextRole, TextRoleExt};
@@ -132,11 +133,11 @@ impl Component for ThemeCard {
             .spacing(10.)
             .cross_align(Alignment::Center)
             .corner_radius(Radius::CONTROL)
-            .background(if press.active() {
+            .background(use_press_fill(if press.active() {
                 palette.surface_raised
             } else {
                 palette.surface
-            })
+            }))
             .border(press.focus_border(palette.accent, true).unwrap_or_else(|| {
                 Border::new()
                     .fill(outline)

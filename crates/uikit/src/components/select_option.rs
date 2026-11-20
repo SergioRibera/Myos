@@ -5,6 +5,7 @@ use freya::prelude::*;
 use super::Action;
 use super::press::use_press;
 use crate::icon::{Icon, IconName};
+use crate::motion::use_press_fill;
 use crate::theme::use_theme;
 use crate::tokens::{Radius, Space, Stroke, TextRole, TextRoleExt};
 
@@ -153,7 +154,7 @@ impl Component for SelectOption {
             .cross_align(Alignment::Center)
             .spacing(Space::MD)
             .corner_radius(Radius::CONTROL)
-            .background(fill)
+            .background(use_press_fill(fill))
             .border(border)
             .child(icon_tile)
             .child(text)

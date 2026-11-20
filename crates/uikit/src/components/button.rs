@@ -5,6 +5,7 @@ use freya::prelude::*;
 use super::Action;
 use super::press::use_press;
 use crate::icon::{Icon, IconName};
+use crate::motion::use_press_fill;
 use crate::theme::use_theme;
 use crate::tokens::{Dimen, Palette, Space, Stroke, TextRole, TextRoleExt};
 
@@ -225,7 +226,9 @@ impl Component for Button {
             .center()
             .spacing(Space::SM)
             .corner_radius(height / 2.)
-            .map(fill, BackgroundExt::background)
+            .background(use_press_fill(
+                fill.unwrap_or_else(|| colors.pressed.with_a(0)),
+            ))
             .border(border)
             .maybe_child(
                 self.icon

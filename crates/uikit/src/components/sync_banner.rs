@@ -5,8 +5,9 @@ use freya::prelude::*;
 use super::Action;
 use super::button::Button;
 use crate::icon::{Icon, IconName};
+use crate::motion::use_number_transition;
 use crate::theme::use_theme;
-use crate::tokens::{Stroke, TextRole, TextRoleExt};
+use crate::tokens::{Motion, Stroke, TextRole, TextRoleExt};
 
 /// Offline-first sync state (Penpot property `Estado`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,6 +76,7 @@ impl Component for SyncBanner {
             SyncStatus::Syncing { progress } => Some(progress.clamp(0., 1.)),
             SyncStatus::UpToDate | SyncStatus::Offline | SyncStatus::Error => None,
         };
+        let progress_width = use_number_transition(progress.unwrap_or(0.) * 100., Motion::BASE);
         let retry = self
             .on_retry
             .as_ref()
@@ -112,7 +114,7 @@ impl Component for SyncBanner {
                     .max_lines(1)
                     .text_overflow(TextOverflow::Ellipsis),
             )
-            .maybe_child(progress.map(|progress| {
+            .maybe_child(progress.map(|_| {
                 rect()
                     .width(Size::px(82.))
                     .height(Size::px(6.))
@@ -120,7 +122,7 @@ impl Component for SyncBanner {
                     .background(palette.surface_sunken)
                     .child(
                         rect()
-                            .width(Size::percent(progress * 100.))
+                            .width(Size::percent(progress_width))
                             .height(Size::fill())
                             .corner_radius(3.)
                             .background(palette.accent),

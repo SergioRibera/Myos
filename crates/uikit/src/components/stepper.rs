@@ -5,6 +5,7 @@ use freya::prelude::*;
 use super::Action;
 use super::press::use_press;
 use crate::icon::{Icon, IconName};
+use crate::motion::use_press_fill;
 use crate::theme::use_theme;
 use crate::tokens::{Dimen, Radius, Space, TextRole, TextRoleExt};
 
@@ -129,7 +130,7 @@ impl Component for StepButton {
             .height(Size::px(Dimen::TOUCH))
             .center()
             .corner_radius(Dimen::TOUCH / 2.)
-            .background(fill)
+            .background(use_press_fill(fill))
             .border(press.focus_border(palette.accent, true))
             .child(Icon::new(self.icon).weight(2.4).color(palette.ink));
         press.wire(

@@ -4,6 +4,7 @@ use freya::prelude::*;
 
 use super::Action;
 use super::press::use_press;
+use crate::motion::use_press_fill;
 use crate::theme::use_theme;
 use crate::tokens::{Dimen, Palette, Radius, Space, TextRole, TextRoleExt};
 
@@ -116,7 +117,7 @@ impl Component for Chip {
             .cross_align(Alignment::Center)
             .spacing(6.)
             .corner_radius(Radius::CHIP)
-            .background(fill)
+            .background(use_press_fill(fill))
             .border(press.focus_border(palette.accent, false))
             .maybe_child(dot.map(|color| {
                 rect()

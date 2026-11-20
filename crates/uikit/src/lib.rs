@@ -17,6 +17,7 @@
 //!
 //! fn app() -> impl IntoElement {
 //!     ui::use_provide_theme_mode(ThemeMode::System);
+//!     ui::use_provide_reduced_motion(ui::ReducedMotion(false));
 //!     ui::Screen::new().child(ui::Button::primary("Empezar sesión"))
 //! }
 //! ```
@@ -27,6 +28,7 @@
 pub mod components;
 pub mod fonts;
 pub mod icon;
+pub mod motion;
 pub mod theme;
 pub mod tokens;
 
@@ -34,6 +36,7 @@ pub use components::*;
 #[cfg(feature = "winit")]
 pub use fonts::LaunchConfigExt;
 pub use icon::{Icon, IconName};
+pub use motion::{ReducedMotion, use_provide_reduced_motion, use_reduced_motion};
 pub use theme::{Appearance, Theme, ThemeMode, use_provide_theme_mode, use_theme};
 pub use tokens::{
     Brand, DISABLED_OPACITY, Dimen, FONT_FAMILY, Motion, Palette, Radius, Space, Stroke, TextRole,
