@@ -4,12 +4,16 @@
 //! transaction that stamps the row with a hybrid logical clock, bumps the
 //! local sequence and queues the row in the sync outbox.
 
+mod content;
 mod convert;
+mod diet;
 mod hlc;
 mod ids;
 mod key;
 mod migrate;
+mod plan;
 mod profile;
+mod routines;
 mod sync;
 pub mod tlv;
 mod training;
@@ -19,9 +23,12 @@ use std::path::Path;
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior};
 use uuid::Uuid;
 
+pub use diet::{FoodId, MealsRead};
 pub use hlc::Hlc;
 pub use key::DatabaseKey;
+pub use plan::Read;
 pub use profile::MeasurementsRead;
+pub use routines::{RoutineSummary, StoredRoutine};
 pub use sync::{Entity, Op, OutboxEntry};
 pub use training::{SessionDraft, SessionsRead, SetsRead, StoredSet};
 
@@ -72,6 +79,9 @@ pub enum Error {
     /// A value does not fit its stored range.
     #[error("{0} is out of range")]
     OutOfRange(&'static str),
+    /// A structured column or payload is malformed.
+    #[error("malformed record: {0}")]
+    Payload(#[from] crate::tlv::TlvError),
 }
 
 /// Where the database lives.
@@ -148,12 +158,13 @@ impl Store {
         let exists: Option<i64> = conn
             .query_row("SELECT k FROM sync_state", [], |row| row.get(0))
             .optional()?;
+        // `OR IGNORE`: another connection may initialize it concurrently.
         if exists.is_none() {
             let node = getrandom::u32().map_err(Error::Random)? & 0x7fff_ffff;
             let mut user_key = zeroize::Zeroizing::new([0_u8; 32]);
             getrandom::fill(user_key.as_mut_slice()).map_err(Error::Random)?;
             conn.execute(
-                "INSERT INTO sync_state (k, device_id, node, user_key, hlc_last)
+                "INSERT OR IGNORE INTO sync_state (k, device_id, node, user_key, hlc_last)
                  VALUES (1, ?1, ?2, ?3, 0)",
                 (
                     Uuid::now_v7().as_bytes().as_slice(),
@@ -196,7 +207,9 @@ impl Store {
         let stamp = Stamp {
             hlc,
             node,
-            local_seq: local_seq + 1,
+            local_seq: local_seq
+                .checked_add(1)
+                .ok_or(Error::OutOfRange("local_seq"))?,
             now_millis,
         };
         tx.execute(

@@ -21,6 +21,8 @@ pub enum TlvError {
     TooLarge,
     /// A varint does not fit its type.
     Overflow,
+    /// A varint uses more bytes than needed, or tag 0 (reserved) is used.
+    NonCanonical,
     /// Tags are not strictly increasing.
     Unordered {
         /// Tag that broke the order.
@@ -39,6 +41,7 @@ impl fmt::Display for TlvError {
             Self::Truncated => f.write_str("record is truncated"),
             Self::TooLarge => f.write_str("record exceeds the size limit"),
             Self::Overflow => f.write_str("integer overflows its type"),
+            Self::NonCanonical => f.write_str("non-canonical encoding"),
             Self::Unordered { tag } => write!(f, "tag {tag} is out of order"),
             Self::Malformed { tag } => write!(f, "tag {tag} holds a malformed value"),
         }
@@ -208,6 +211,9 @@ impl Tlv {
         let mut previous: Option<u16> = None;
         while !cursor.is_empty() {
             let tag = u16::try_from(read_varint(&mut cursor)?).map_err(|_| TlvError::Overflow)?;
+            if tag == 0 {
+                return Err(TlvError::NonCanonical);
+            }
             if previous.is_some_and(|previous| tag <= previous) {
                 return Err(TlvError::Unordered { tag });
             }
@@ -249,6 +255,11 @@ fn read_varint(cursor: &mut &[u8]) -> Result<u64, TlvError> {
         }
         value |= bits << shift;
         if byte & 0x80 == 0 {
+            // Canonical form only: a zero final byte after the first would
+            // encode the same value in more bytes.
+            if shift > 0 && byte == 0 {
+                return Err(TlvError::NonCanonical);
+            }
             return Ok(value);
         }
     }
@@ -310,6 +321,31 @@ mod tests {
         assert_eq!(
             Tlv::decode(&[0x80, 0x80, 0x04, 0], 64),
             Err(TlvError::Overflow)
+        );
+    }
+
+    #[test]
+    fn rejects_non_canonical_varints_and_tag_zero() {
+        // 1 encoded in two bytes.
+        assert_eq!(
+            Tlv::decode(&[0x81, 0x00, 0], 64),
+            Err(TlvError::NonCanonical)
+        );
+        assert_eq!(Tlv::decode(&[0, 0], 64), Err(TlvError::NonCanonical));
+        // Largest u64: nine 0xff then 0x01 is canonical.
+        let mut max = vec![1_u8];
+        max.extend([0xff; 9]);
+        max.push(0x01);
+        max.push(0);
+        assert!(
+            Tlv::decode(&max, 64).is_err(),
+            "tag above u16 still overflows"
+        );
+        let mut record = Tlv::default();
+        record.put_uint(1, u64::MAX);
+        assert_eq!(
+            Tlv::decode(&record.encode(), 64).map(|r| r.uint(1)),
+            Ok(Ok(Some(u64::MAX)))
         );
     }
 

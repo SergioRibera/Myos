@@ -22,7 +22,7 @@ pub(crate) fn natural(user_key: &[u8; 32], entity: Entity, parts: &[&[u8]]) -> U
         .expect("invariant: HMAC accepts keys of any length");
     mac.update(&entity.code().to_be_bytes());
     for part in parts {
-        let len = u32::try_from(part.len()).unwrap_or(u32::MAX);
+        let len = u32::try_from(part.len()).expect("invariant: natural key parts are short");
         mac.update(&len.to_be_bytes());
         mac.update(part);
     }

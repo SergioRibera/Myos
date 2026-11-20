@@ -5,7 +5,10 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::Error;
 
 /// Migrations of `user.db`, in order. Never edit a shipped entry: append.
-pub(crate) const USER: &[&str] = &[include_str!("../migrations/user/0001_training.sql")];
+pub(crate) const USER: &[&str] = &[
+    include_str!("../migrations/user/0001_training.sql"),
+    include_str!("../migrations/user/0002_plans_diet.sql"),
+];
 
 /// Bring `conn` to the latest of `migrations`.
 ///
@@ -16,8 +19,10 @@ pub(crate) const USER: &[&str] = &[include_str!("../migrations/user/0001_trainin
 pub(crate) fn run(conn: &mut Connection, migrations: &[&str]) -> Result<(), Error> {
     conn.pragma_update(None, "foreign_keys", false)?;
     let result = run_steps(conn, migrations);
-    conn.pragma_update(None, "foreign_keys", true)?;
-    result
+    // Restore enforcement even when a step failed; the step's error wins.
+    let restored = conn.pragma_update(None, "foreign_keys", true);
+    result?;
+    restored.map_err(Error::from)
 }
 
 fn run_steps(conn: &mut Connection, migrations: &[&str]) -> Result<(), Error> {

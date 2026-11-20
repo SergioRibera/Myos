@@ -10,6 +10,7 @@
 --   field_hlc  TLV tag -> hlc for tables merged per field; NULL means every
 --              field was last written at the row hlc
 -- Enum columns only get range checks: newer app versions add codes.
+-- Instants are Unix milliseconds within 1970 ..= 9999.
 
 CREATE TABLE sync_state (
   k                INTEGER PRIMARY KEY CHECK (k = 1),
@@ -138,8 +139,8 @@ CREATE TABLE import_batch (
 
 CREATE TABLE workout_session (
   id                   BLOB PRIMARY KEY CHECK (length(id) = 16),
-  started_at           INTEGER NOT NULL,
-  ended_at             INTEGER,
+  started_at           INTEGER NOT NULL CHECK (started_at BETWEEN 0 AND 253402300799999),
+  ended_at             INTEGER CHECK (ended_at BETWEEN 0 AND 253402300799999),
   day                  INTEGER NOT NULL CHECK (day BETWEEN 0 AND 73000),
   tz_offset_min        INTEGER NOT NULL CHECK (tz_offset_min BETWEEN -840 AND 840),
   origin               INTEGER NOT NULL CHECK (origin BETWEEN 0 AND 255),
@@ -210,12 +211,12 @@ CREATE INDEX external_activity_key ON external_activity (source, external_id)
 
 CREATE TABLE body_measurement (
   id              BLOB PRIMARY KEY CHECK (length(id) = 16),
-  measured_at     INTEGER NOT NULL,
+  measured_at     INTEGER NOT NULL CHECK (measured_at BETWEEN 0 AND 253402300799999),
   day             INTEGER NOT NULL CHECK (day BETWEEN 0 AND 73000),
   tz_offset_min   INTEGER NOT NULL CHECK (tz_offset_min BETWEEN -840 AND 840),
   kind            INTEGER NOT NULL CHECK (kind BETWEEN 0 AND 65535),
   side            INTEGER NOT NULL DEFAULT 0 CHECK (side BETWEEN 0 AND 255),  -- 0 = none
-  method          INTEGER NOT NULL DEFAULT 0 CHECK (method BETWEEN 0 AND 255),
+  method          INTEGER NOT NULL DEFAULT 1 CHECK (method BETWEEN 0 AND 255),  -- 1 unspecified
   value           INTEGER NOT NULL,
   source          INTEGER NOT NULL CHECK (source BETWEEN 0 AND 255),
   external_ref    TEXT CHECK (length(external_ref) <= 200),

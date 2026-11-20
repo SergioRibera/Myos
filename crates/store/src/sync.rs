@@ -27,6 +27,36 @@ pub enum Entity {
     ExternalActivity,
     /// `body_measurement`.
     BodyMeasurement,
+    /// `custom_food` with its portions.
+    CustomFood,
+    /// `recipe` with its items.
+    Recipe,
+    /// `meal`.
+    Meal,
+    /// `meal_item`.
+    MealItem,
+    /// `routine` (head).
+    Routine,
+    /// `routine_version`.
+    RoutineVersion,
+    /// `nutrition_plan` (head).
+    NutritionPlan,
+    /// `nutrition_plan_version`.
+    NutritionPlanVersion,
+    /// `plan_phase`.
+    PlanPhase,
+    /// `plan_event`.
+    PlanEvent,
+    /// `calibration_result`.
+    CalibrationResult,
+    /// `volume_range_override`.
+    VolumeRangeOverride,
+    /// `suggestion`.
+    Suggestion,
+    /// `suggestion_response`.
+    SuggestionResponse,
+    /// `equipment_profile` with its items.
+    EquipmentProfile,
 }
 
 myos_core::codes!(Entity {
@@ -39,6 +69,21 @@ myos_core::codes!(Entity {
     ImportBatch = 7,
     ExternalActivity = 8,
     BodyMeasurement = 9,
+    CustomFood = 10,
+    Recipe = 11,
+    Meal = 12,
+    MealItem = 13,
+    Routine = 14,
+    RoutineVersion = 15,
+    NutritionPlan = 16,
+    NutritionPlanVersion = 17,
+    PlanPhase = 18,
+    PlanEvent = 19,
+    CalibrationResult = 20,
+    VolumeRangeOverride = 21,
+    Suggestion = 22,
+    SuggestionResponse = 23,
+    EquipmentProfile = 24,
 });
 
 /// What happened to a row.

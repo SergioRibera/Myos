@@ -61,6 +61,8 @@ pub struct SessionsRead {
     pub sessions: Vec<Session>,
     /// Sets left out because this build cannot decode them.
     pub undecodable_sets: u32,
+    /// Sessions with values this build cannot read; left out with their sets.
+    pub undecodable_sessions: u32,
 }
 
 /// Exercise source recorded in `exercise_ref`, from the id's UUID version.
@@ -162,6 +164,16 @@ impl SetColumns {
             Some(Effort::Rir(rir)) => (Some(rir.get()), None),
             Some(Effort::Rpe(rpe)) => (None, Some(rpe.half_points())),
         };
+        if let Some(zones) = set.zones {
+            let total = zones
+                .0
+                .iter()
+                .try_fold(Duration::ZERO, |total, zone| total.checked_add(*zone))
+                .ok_or(Error::OutOfRange("zones"))?;
+            if total > set.duration.unwrap_or(MAX_DURATION) {
+                return Err(Error::OutOfRange("zones"));
+            }
+        }
         let hr_zones = set.zones.map(encode_zones).transpose()?;
         Ok(Self {
             exercise: blob(set.exercise.uuid()),
@@ -528,15 +540,21 @@ impl Store {
         let mut rows = statement.query([first, last])?;
         let mut sessions = Vec::new();
         let mut index = HashMap::new();
+        let mut undecodable_sessions = 0;
         while let Some(row) = rows.next()? {
             let id: [u8; 16] = row.get(0)?;
-            let started_at = Timestamp::from_millisecond(row.get(1)?)
-                .map_err(|_| Error::OutOfRange("started_at"))?;
+            let (Ok(started_at), Ok(day)) = (
+                Timestamp::from_millisecond(row.get(1)?),
+                day_from_number(row.get(2)?),
+            ) else {
+                undecodable_sessions += 1;
+                continue;
+            };
             index.insert(id, sessions.len());
             sessions.push(Session {
                 id: id_from(id),
                 started_at,
-                day: day_from_number(row.get(2)?)?,
+                day,
                 sets: Vec::new(),
             });
         }
@@ -562,6 +580,7 @@ impl Store {
         Ok(SessionsRead {
             sessions,
             undecodable_sets,
+            undecodable_sessions,
         })
     }
 }
