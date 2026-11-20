@@ -53,6 +53,10 @@ CREATE TABLE meal (
   plan_meal_id    BLOB CHECK (plan_meal_id IS NULL OR length(plan_meal_id) = 16),
   quick_size      INTEGER CHECK (quick_size BETWEEN 0 AND 255),
   quick_protein   INTEGER CHECK (quick_protein BETWEEN 0 AND 255),
+  -- Generation of the current item list. Replacing the items mints a new one;
+  -- only items of the current generation count, so two devices replacing the
+  -- items concurrently end with one list (the header that wins), not both.
+  items_gen       BLOB NOT NULL CHECK (length(items_gen) = 16),
   import_batch_id BLOB CHECK (import_batch_id IS NULL OR length(import_batch_id) = 16),
   note            TEXT CHECK (length(note) <= 500),
   field_hlc       BLOB,
@@ -64,10 +68,11 @@ CREATE INDEX meal_day ON meal (day) WHERE deleted_at IS NULL;
 CREATE INDEX meal_seq ON meal (local_seq);
 
 -- No foreign key to meal: both are sync roots. An item is live only while its
--- meal is.
+-- meal is and its generation is the meal's current one.
 CREATE TABLE meal_item (
   id                BLOB PRIMARY KEY CHECK (length(id) = 16),
   meal_id           BLOB NOT NULL CHECK (length(meal_id) = 16),
+  generation        BLOB NOT NULL CHECK (length(generation) = 16),
   position          INTEGER NOT NULL CHECK (position >= 0),
   food_src          INTEGER NOT NULL CHECK (food_src BETWEEN 1 AND 4),  -- catalog, off, custom, recipe
   food_id           BLOB CHECK (food_id IS NULL OR length(food_id) = 16),
@@ -83,7 +88,8 @@ CREATE TABLE meal_item (
   CHECK ((food_src = 2) = (barcode IS NOT NULL)),
   CHECK ((food_src = 2) = (food_id IS NULL))
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX meal_item_meal ON meal_item (meal_id, position) WHERE deleted_at IS NULL;
+CREATE INDEX meal_item_meal ON meal_item (meal_id, generation, position)
+  WHERE deleted_at IS NULL;
 CREATE INDEX meal_item_seq ON meal_item (local_seq);
 
 -- Routines and nutrition plans: a head row (per-field LWW; one writer, the
@@ -111,6 +117,7 @@ CREATE TABLE routine_version (
   local_seq INTEGER NOT NULL, deleted_at INTEGER, extra BLOB
 ) STRICT;
 CREATE INDEX routine_version_routine ON routine_version (routine_id, n);
+CREATE INDEX routine_version_seq ON routine_version (local_seq);
 
 CREATE TABLE nutrition_plan (
   id                 BLOB PRIMARY KEY CHECK (length(id) = 16),
@@ -150,6 +157,7 @@ CREATE TABLE plan_phase (
   CHECK (ends_on >= starts_on)
 ) STRICT;
 CREATE INDEX plan_phase_days ON plan_phase (starts_on, ends_on) WHERE deleted_at IS NULL;
+CREATE INDEX plan_phase_seq ON plan_phase (local_seq);
 
 CREATE TABLE plan_event (
   id       BLOB PRIMARY KEY CHECK (length(id) = 16),
@@ -169,7 +177,6 @@ CREATE TABLE calibration_result (
   exercise_id  BLOB NOT NULL CHECK (length(exercise_id) = 16),
   day          INTEGER NOT NULL CHECK (day BETWEEN 0 AND 73000),
   protocol     INTEGER NOT NULL CHECK (protocol BETWEEN 0 AND 255),
-  kind         INTEGER NOT NULL CHECK (kind BETWEEN 0 AND 255),
   value        INTEGER NOT NULL,
   unit         INTEGER NOT NULL CHECK (unit BETWEEN 0 AND 255),
   rir_declared INTEGER CHECK (rir_declared BETWEEN 0 AND 10),
@@ -178,6 +185,7 @@ CREATE TABLE calibration_result (
 ) STRICT;
 CREATE INDEX calibration_result_exercise ON calibration_result (exercise_id, day)
   WHERE deleted_at IS NULL;
+CREATE INDEX calibration_result_seq ON calibration_result (local_seq);
 
 -- id = HMAC(user_key, muscle, goal, level). No unique index: rows minted
 -- under different pre-login keys coexist until the login rewrite; reads take
@@ -200,7 +208,7 @@ CREATE INDEX volume_range_override_key ON volume_range_override (muscle, goal, l
 
 CREATE TABLE suggestion (               -- immutable after creation
   id            BLOB PRIMARY KEY CHECK (length(id) = 16),
-  created_at    INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL CHECK (created_at BETWEEN 0 AND 253402300799999),
   rule          INTEGER NOT NULL CHECK (rule BETWEEN 0 AND 65535),
   rule_version  INTEGER NOT NULL CHECK (rule_version >= 0),
   model         INTEGER NOT NULL CHECK (model BETWEEN 0 AND 65535),
@@ -218,7 +226,7 @@ CREATE TABLE suggestion_response (      -- append-only; latest wins for display
   suggestion_id BLOB NOT NULL CHECK (length(suggestion_id) = 16),
   response      INTEGER NOT NULL CHECK (response BETWEEN 0 AND 255),
   reason        INTEGER CHECK (reason BETWEEN 0 AND 255),
-  at            INTEGER NOT NULL,
+  at            INTEGER NOT NULL CHECK (at BETWEEN 0 AND 253402300799999),
   hlc INTEGER NOT NULL, node INTEGER NOT NULL, server_rev INTEGER,
   local_seq INTEGER NOT NULL, deleted_at INTEGER, extra BLOB
 ) STRICT;
@@ -246,7 +254,6 @@ CREATE TABLE attachment (
   id           BLOB PRIMARY KEY CHECK (length(id) = 16),
   owner_entity INTEGER NOT NULL CHECK (owner_entity BETWEEN 1 AND 65535),
   owner_id     BLOB NOT NULL CHECK (length(owner_id) = 16),
-  kind         INTEGER NOT NULL CHECK (kind BETWEEN 0 AND 255),
   mime         TEXT NOT NULL CHECK (length(mime) BETWEEN 1 AND 100),
   sha256       BLOB NOT NULL CHECK (length(sha256) = 32),
   size         INTEGER NOT NULL CHECK (size >= 0),

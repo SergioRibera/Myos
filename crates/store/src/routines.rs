@@ -108,7 +108,7 @@ fn insert_routine(
     tx: &Transaction<'_>,
     name: &str,
     follow: FollowMode,
-    upstream: Option<(Uuid, Uuid)>,
+    upstream: Option<(Uuid, Option<Uuid>)>,
     content: &[u8],
     stamp: Stamp,
 ) -> Result<Uuid, Error> {
@@ -125,7 +125,9 @@ fn insert_routine(
             version.as_bytes().as_slice(),
             upstream.map(|(routine, _)| *routine.as_bytes()),
             follow.code(),
-            upstream.map(|(_, version)| *version.as_bytes()),
+            upstream
+                .and_then(|(_, version)| version)
+                .map(|version| *version.as_bytes()),
             sync::sql_hlc(stamp.hlc)?,
             stamp.node,
             stamp.local_seq,
@@ -192,8 +194,9 @@ impl Store {
         Ok(Id::from(version))
     }
 
-    /// Copy a live routine. `Follow` keeps a link so new upstream versions can
-    /// be offered; `Copy` (or `Own`) is a plain duplicate.
+    /// Copy a live routine. `Follow` keeps the followed version so new
+    /// upstream versions can be offered; `Copy` only records where it came
+    /// from; `Own` is a plain duplicate.
     pub fn copy_routine(
         &mut self,
         source: RoutineId,
@@ -215,7 +218,8 @@ impl Store {
                 .ok_or(Error::NotFound("live routine"))?;
             let upstream = match follow {
                 FollowMode::Own => None,
-                FollowMode::Copy | FollowMode::Follow => Some((source, Uuid::from_bytes(version))),
+                FollowMode::Copy => Some((source, None)),
+                FollowMode::Follow => Some((source, Some(Uuid::from_bytes(version)))),
             };
             insert_routine(tx, name, follow, upstream, &content, stamp)
         })?;
@@ -274,9 +278,15 @@ impl Store {
         let id = routine.uuid();
         let (name, follow, upstream, version, number, content): Head = self
             .conn()
+            // The head may arrive before its current version: fall back to the
+            // newest version present. Version numbers can repeat across
+            // devices, so order by (n, hlc, node).
             .query_row(
                 "SELECT r.name, r.follow_mode, r.upstream_id, v.id, v.n, v.content
-                 FROM routine r JOIN routine_version v ON v.id = r.current_version_id
+                 FROM routine r JOIN routine_version v ON v.id = coalesce(
+                   (SELECT id FROM routine_version WHERE id = r.current_version_id),
+                   (SELECT id FROM routine_version WHERE routine_id = r.id
+                    ORDER BY n DESC, hlc DESC, node DESC LIMIT 1))
                  WHERE r.id = ?1 AND r.deleted_at IS NULL",
                 [id.as_bytes().as_slice()],
                 |row| {
@@ -291,7 +301,7 @@ impl Store {
                 },
             )
             .optional()?
-            .ok_or(Error::NotFound("live routine with its current version"))?;
+            .ok_or(Error::NotFound("live routine"))?;
         let follow = u16::try_from(follow)
             .ok()
             .and_then(FollowMode::from_code)
@@ -340,5 +350,27 @@ impl Store {
             })?
             .collect::<Result<_, _>>()
             .map_err(Error::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DatabaseKey;
+
+    #[test]
+    fn a_head_ahead_of_its_version_reads_the_newest_present() -> Result<(), Error> {
+        let mut store = Store::open_in_memory(&DatabaseKey::generate()?)?;
+        let content = RoutineContent::default();
+        let id = store.create_routine("PPL", &content)?;
+        let second = store.save_routine_version(id, &content)?;
+        // The head synced with a version that has not arrived yet.
+        store.conn.execute(
+            "UPDATE routine SET current_version_id = ?1",
+            [Uuid::now_v7().as_bytes().as_slice()],
+        )?;
+        let stored = store.routine(id)?;
+        assert_eq!((stored.version, stored.number), (second, 2));
+        Ok(())
     }
 }

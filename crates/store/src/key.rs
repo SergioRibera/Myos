@@ -28,16 +28,25 @@ impl DatabaseKey {
         &self.bytes
     }
 
+    /// `x'<hex>'` raw-key literal, wiped on drop.
+    pub(crate) fn raw_literal(&self) -> Zeroizing<String> {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut literal = Zeroizing::new(String::with_capacity(67));
+        literal.push_str("x'");
+        for byte in self.bytes.iter() {
+            literal.push(char::from(HEX[usize::from(byte >> 4)]));
+            literal.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        literal.push('\'');
+        literal
+    }
+
     /// `PRAGMA key` statement for this key, wiped on drop.
     pub(crate) fn pragma(&self) -> Zeroizing<String> {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut statement = Zeroizing::new(String::with_capacity(84));
-        statement.push_str("PRAGMA key = \"x'");
-        for byte in self.bytes.iter() {
-            statement.push(char::from(HEX[usize::from(byte >> 4)]));
-            statement.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-        statement.push_str("'\";");
+        statement.push_str("PRAGMA key = \"");
+        statement.push_str(&self.raw_literal());
+        statement.push_str("\";");
         statement
     }
 }

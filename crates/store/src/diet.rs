@@ -14,7 +14,7 @@ use rusqlite::{Row, Transaction, params};
 use uuid::Uuid;
 
 use crate::content::{decode_nutrients, encode_nutrients};
-use crate::convert::{day_from_number, day_number};
+use crate::convert::{MAX_INSTANT_MS, day_from_number, day_number};
 use crate::sync::{self, Entity, Op};
 use crate::{Error, Stamp, Store};
 
@@ -90,6 +90,9 @@ fn validate_meal(meal: &Meal, tz_offset_min: i16) -> Result<(), Error> {
         return Err(Error::OutOfRange("tz_offset_min"));
     }
     check_opt_text(meal.note.as_deref(), MAX_NOTE, "note")?;
+    if !(0..=MAX_INSTANT_MS).contains(&meal.eaten_at.as_millisecond()) {
+        return Err(Error::OutOfRange("eaten_at"));
+    }
     if let MealContent::Detailed(items) = &meal.content {
         for item in items {
             check_grams(item.grams_mg)?;
@@ -106,6 +109,7 @@ fn validate_meal(meal: &Meal, tz_offset_min: i16) -> Result<(), Error> {
 fn insert_items(
     tx: &Transaction<'_>,
     meal: Uuid,
+    generation: Uuid,
     items: &[MealItem],
     stamp: Stamp,
 ) -> Result<(), Error> {
@@ -114,12 +118,13 @@ fn insert_items(
         let (src, food_id, barcode) = food_columns(&item.food);
         tx.execute(
             "INSERT INTO meal_item
-               (id, meal_id, position, food_src, food_id, barcode, grams_mg, name_snapshot,
-                brand_snapshot, nutrients, hlc, node, local_seq)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+               (id, meal_id, generation, position, food_src, food_id, barcode, grams_mg,
+                name_snapshot, brand_snapshot, nutrients, hlc, node, local_seq)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 id.as_bytes().as_slice(),
                 meal.as_bytes().as_slice(),
+                generation.as_bytes().as_slice(),
                 i64::try_from(position).map_err(|_| Error::OutOfRange("items"))?,
                 src,
                 food_id,
@@ -174,12 +179,13 @@ impl Store {
         let day = day_number(meal.day)?;
         let id = Uuid::now_v7();
         let (mode, quick_size, quick_protein) = content_columns(&meal.content);
+        let generation = Uuid::now_v7();
         self.write(|tx, stamp| {
             tx.execute(
                 "INSERT INTO meal
                    (id, eaten_at, day, tz_offset_min, slot, mode, quick_size, quick_protein,
-                    note, hlc, node, local_seq)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    note, items_gen, hlc, node, local_seq)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     id.as_bytes().as_slice(),
                     meal.eaten_at.as_millisecond(),
@@ -190,16 +196,17 @@ impl Store {
                     quick_size,
                     quick_protein,
                     meal.note,
+                    generation.as_bytes().as_slice(),
                     sync::sql_hlc(stamp.hlc)?,
                     stamp.node,
                     stamp.local_seq,
                 ],
             )?;
-            sync::enqueue(tx, Entity::Meal, id, Op::Upsert, stamp)?;
             if let MealContent::Detailed(items) = &meal.content {
-                insert_items(tx, id, items, stamp)?;
+                insert_items(tx, id, generation, items, stamp)?;
             }
-            Ok(())
+            // After the items: receivers see the new generation with its items.
+            sync::enqueue(tx, Entity::Meal, id, Op::Upsert, stamp)
         })?;
         Ok(Id::from(id))
     }
@@ -216,10 +223,11 @@ impl Store {
         let day = day_number(meal.day)?;
         let id = meal_id.uuid();
         let (mode, quick_size, quick_protein) = content_columns(&meal.content);
+        let generation = Uuid::now_v7();
         self.write(|tx, stamp| {
             let changed = tx.execute(
                 "UPDATE meal SET eaten_at = ?2, day = ?3, tz_offset_min = ?4, slot = ?5,
-                   mode = ?6, quick_size = ?7, quick_protein = ?8, note = ?9,
+                   mode = ?6, quick_size = ?7, quick_protein = ?8, note = ?9, items_gen = ?13,
                    field_hlc = NULL, hlc = ?10, node = ?11, local_seq = ?12
                  WHERE id = ?1 AND deleted_at IS NULL",
                 params![
@@ -235,12 +243,12 @@ impl Store {
                     sync::sql_hlc(stamp.hlc)?,
                     stamp.node,
                     stamp.local_seq,
+                    generation.as_bytes().as_slice(),
                 ],
             )?;
             if changed == 0 {
                 return Err(Error::NotFound("live meal"));
             }
-            sync::enqueue(tx, Entity::Meal, id, Op::Upsert, stamp)?;
             let old: Vec<[u8; 16]> = tx
                 .prepare_cached(
                     "SELECT id FROM meal_item WHERE meal_id = ?1 AND deleted_at IS NULL",
@@ -268,9 +276,9 @@ impl Store {
                 )?;
             }
             if let MealContent::Detailed(items) = &meal.content {
-                insert_items(tx, id, items, stamp)?;
+                insert_items(tx, id, generation, items, stamp)?;
             }
-            Ok(())
+            sync::enqueue(tx, Entity::Meal, id, Op::Upsert, stamp)
         })
     }
 
@@ -300,13 +308,17 @@ impl Store {
     pub fn meals_in(&self, span: DaySpan) -> Result<MealsRead, Error> {
         let first = day_number(span.first())?;
         let last = day_number(span.last())?;
+        // One read transaction: the item list and the headers come from the
+        // same snapshot.
+        let tx = self.conn().unchecked_transaction()?;
 
         let mut items: HashMap<[u8; 16], Option<Vec<MealItem>>> = HashMap::new();
-        let mut statement = self.conn().prepare_cached(
+        let mut statement = tx.prepare_cached(
             "SELECT i.meal_id, i.food_src, i.food_id, i.barcode, i.grams_mg, i.name_snapshot,
                     i.brand_snapshot, i.nutrients
              FROM meal_item i JOIN meal m ON m.id = i.meal_id
              WHERE i.deleted_at IS NULL AND m.deleted_at IS NULL AND m.day BETWEEN ?1 AND ?2
+               AND i.generation = m.items_gen
              ORDER BY i.meal_id, i.position, i.id",
         )?;
         let mut rows = statement.query([first, last])?;
@@ -321,7 +333,7 @@ impl Store {
             }
         }
 
-        let mut statement = self.conn().prepare_cached(
+        let mut statement = tx.prepare_cached(
             "SELECT id, eaten_at, day, slot, mode, quick_size, quick_protein, note
              FROM meal WHERE deleted_at IS NULL AND day BETWEEN ?1 AND ?2
              ORDER BY eaten_at, id",
@@ -479,5 +491,53 @@ impl Store {
             }
             sync::enqueue(tx, Entity::CustomFood, id, Op::Delete, stamp)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::civil::date;
+    use myos_core::diet::{Nutrient, Nutrients};
+
+    use super::*;
+    use crate::DatabaseKey;
+
+    fn item(name: &str) -> MealItem {
+        MealItem {
+            food: FoodRef::Catalog(Id::generate()),
+            grams_mg: 100_000,
+            name: name.into(),
+            brand: None,
+            density: Nutrients::default().with(Nutrient::Protein, 10_000),
+        }
+    }
+
+    #[test]
+    fn only_items_of_the_current_generation_count() -> Result<(), Error> {
+        let mut store = Store::open_in_memory(&DatabaseKey::generate()?)?;
+        let meal = Meal {
+            eaten_at: Timestamp::UNIX_EPOCH,
+            day: date(2026, 11, 18),
+            slot: None,
+            content: MealContent::Detailed(vec![item("Arroz")]),
+            note: None,
+        };
+        store.log_meal(&meal, 0)?;
+        // An item another device added under an older generation, arriving
+        // after this device's list: it must not be summed in.
+        store.conn.execute(
+            "INSERT INTO meal_item
+               (id, meal_id, generation, position, food_src, food_id, grams_mg, name_snapshot,
+                nutrients, hlc, node, local_seq)
+             SELECT ?1, id, ?2, 0, 1, ?3, 1000, 'Otro', x'', 1, 1, 1 FROM meal",
+            params![
+                Uuid::now_v7().as_bytes().as_slice(),
+                Uuid::now_v7().as_bytes().as_slice(),
+                Uuid::now_v7().as_bytes().as_slice(),
+            ],
+        )?;
+        let read = store.meals_in(DaySpan::iso_week(date(2026, 11, 18)))?;
+        assert_eq!(read.meals[0].1, meal);
+        Ok(())
     }
 }

@@ -1,7 +1,7 @@
 //! Sync outbox: which rows changed since the last push.
 
 use myos_core::code::Code;
-use rusqlite::Transaction;
+use rusqlite::{OptionalExtension, Transaction};
 use uuid::Uuid;
 
 use crate::{Error, Hlc, Stamp, Store};
@@ -124,10 +124,12 @@ pub(crate) fn sql_hlc(hlc: Hlc) -> Result<i64, Error> {
     i64::try_from(hlc.get()).map_err(|_| Error::OutOfRange("hlc"))
 }
 
-/// Queue `row_id` for push. A pending entry for the same row is updated in
-/// place, keeping its position, with a fresh `op_id` (the old one may already
-/// have a server receipt from an attempt that timed out). An explicit restore
-/// is not downgraded to a plain upsert: deletes win unless restored.
+/// Queue `row_id` for push. A pending entry for the same row is replaced by
+/// one at the end of the queue, with a fresh `op_id` (the old one may already
+/// have a server receipt from an attempt that timed out): pushing in queue
+/// order then always sends a row after what it references (a routine head
+/// after its new version). An explicit restore is not downgraded to a plain
+/// upsert: deletes win unless restored.
 pub(crate) fn enqueue(
     tx: &Transaction<'_>,
     entity: Entity,
@@ -135,14 +137,21 @@ pub(crate) fn enqueue(
     op: Op,
     stamp: Stamp,
 ) -> Result<(), Error> {
+    let previous: Option<u16> = tx
+        .query_row(
+            "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state = 0
+             RETURNING op",
+            (entity.code(), row_id.as_bytes().as_slice()),
+            |row| row.get(0),
+        )
+        .optional()?;
+    let op = match (previous.and_then(Op::from_code), op) {
+        (Some(Op::Restore), Op::Upsert) => Op::Restore,
+        (_, op) => op,
+    };
     tx.execute(
         "INSERT INTO sync_outbox (op_id, entity, row_id, op, hlc, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT (entity, row_id) WHERE state = 0
-         DO UPDATE SET
-           op_id = excluded.op_id,
-           op = CASE WHEN op = 3 AND excluded.op = 1 THEN 3 ELSE excluded.op END,
-           hlc = excluded.hlc",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         (
             Uuid::now_v7().as_bytes().as_slice(),
             entity.code(),

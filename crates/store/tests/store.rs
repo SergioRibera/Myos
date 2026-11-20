@@ -163,7 +163,7 @@ fn outbox_coalesces_writes_per_row() {
         .unwrap();
     assert_eq!(set_entry.row_id, set.uuid());
     assert_eq!(set_entry.op, Some(Op::Delete));
-    assert_eq!(set_entry.seq, original.seq, "keeps its place in the queue");
+    assert!(set_entry.seq > original.seq, "moves behind earlier writes");
     assert!(set_entry.hlc > original.hlc);
 }
 
@@ -271,6 +271,6 @@ fn merged_outbox_entries_get_a_fresh_op_id() {
     let before = find(&store);
     store.update_set(set, &working_set(&bench, 85.0)).unwrap();
     let after = find(&store);
-    assert_eq!(before.seq, after.seq);
+    assert!(after.seq > before.seq);
     assert_ne!(before.op_id, after.op_id);
 }

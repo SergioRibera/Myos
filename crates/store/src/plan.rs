@@ -165,7 +165,7 @@ impl Store {
 
     /// Tombstone a phase.
     pub fn delete_phase(&mut self, phase: PhaseId) -> Result<(), Error> {
-        self.tombstone_plan_row("plan_phase", Entity::PlanPhase, phase.uuid())
+        self.tombstone_plan_row("plan_phase", Entity::PlanPhase, phase.uuid(), "live phase")
     }
 
     /// Add an event.
@@ -229,7 +229,7 @@ impl Store {
 
     /// Tombstone an event.
     pub fn delete_event(&mut self, event: EventId) -> Result<(), Error> {
-        self.tombstone_plan_row("plan_event", Entity::PlanEvent, event.uuid())
+        self.tombstone_plan_row("plan_event", Entity::PlanEvent, event.uuid(), "live event")
     }
 
     /// Record a calibration result.
@@ -243,9 +243,9 @@ impl Store {
         self.write(|tx, stamp| {
             tx.execute(
                 "INSERT INTO calibration_result
-                   (id, set_id, exercise_id, day, protocol, kind, value, unit, rir_declared,
+                   (id, set_id, exercise_id, day, protocol, value, unit, rir_declared,
                     hlc, node, local_seq)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     id.as_bytes().as_slice(),
                     result.set.map(|set| *set.uuid().as_bytes()),
@@ -412,7 +412,9 @@ impl Store {
                             reason,
                             at,
                         })),
-                        _ => None,
+                        // An answer this build cannot read: shown as unanswered
+                        // rather than hiding the suggestion.
+                        _ => Some(None),
                     }
                 }
             };
@@ -465,6 +467,7 @@ impl Store {
         table: &'static str,
         entity: Entity,
         id: Uuid,
+        what: &'static str,
     ) -> Result<(), Error> {
         // `table` is one of this module's literals, never user input.
         let sql = format!(
@@ -483,7 +486,7 @@ impl Store {
                 ],
             )?;
             if changed == 0 {
-                return Err(Error::NotFound(table));
+                return Err(Error::NotFound(what));
             }
             sync::enqueue(tx, entity, id, Op::Delete, stamp)
         })

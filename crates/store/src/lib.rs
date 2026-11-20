@@ -6,7 +6,9 @@
 
 mod content;
 mod convert;
+mod derived;
 mod diet;
+mod exercises;
 mod hlc;
 mod ids;
 mod key;
@@ -23,7 +25,9 @@ use std::path::Path;
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior};
 use uuid::Uuid;
 
+pub use derived::RefreshStats;
 pub use diet::{FoodId, MealsRead};
+pub use exercises::CustomExercise;
 pub use hlc::Hlc;
 pub use key::DatabaseKey;
 pub use plan::Read;
@@ -107,26 +111,35 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open (or create) `user.db` at `path` with `key`, and migrate it.
+    /// Open (or create) `user.db` at `path` with `key`, and migrate it. The
+    /// derived cache lives next to it (`<name>.derived.db`, same key).
     ///
     /// # Errors
     ///
     /// [`Error::WrongKey`] when the key does not open the file,
     /// [`Error::NewerSchema`] when a newer app wrote it.
     pub fn open(path: impl AsRef<Path>, key: &DatabaseKey) -> Result<Self, Error> {
-        Self::setup(Connection::open(path)?, key, Durability::File)
+        let path = path.as_ref();
+        let derived = path.with_extension("derived.db");
+        Self::setup(Connection::open(path)?, key, Durability::File, &derived)
     }
 
     /// An in-memory database (tests, previews). `SQLCipher` does not encrypt
     /// memory databases; the key only exercises the same setup path.
     pub fn open_in_memory(key: &DatabaseKey) -> Result<Self, Error> {
-        Self::setup(Connection::open_in_memory()?, key, Durability::Memory)
+        Self::setup(
+            Connection::open_in_memory()?,
+            key,
+            Durability::Memory,
+            Path::new(":memory:"),
+        )
     }
 
     fn setup(
         mut conn: Connection,
         key: &DatabaseKey,
         durability: Durability,
+        derived: &Path,
     ) -> Result<Self, Error> {
         conn.execute_batch(&key.pragma())?;
         // Pin the format so a future SQLCipher major still opens these files.
@@ -151,6 +164,7 @@ impl Store {
         )?;
         migrate::run(&mut conn, migrate::USER)?;
         Self::init_sync_state(&conn)?;
+        derived::attach(&conn, derived, key)?;
         Ok(Self { conn })
     }
 
@@ -224,5 +238,10 @@ impl Store {
     /// Connection for read-only queries.
     pub(crate) const fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Connection for transactions outside [`Store::write`] (caches).
+    pub(crate) const fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
     }
 }

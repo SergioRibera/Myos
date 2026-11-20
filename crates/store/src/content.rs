@@ -36,15 +36,15 @@ pub(crate) fn encode_nutrients(nutrients: &Nutrients) -> Vec<u8> {
     record.encode()
 }
 
-/// Decode per-100 g amounts. Nutrients this build does not know are skipped:
-/// they stay in the stored snapshot, which is never rewritten from here.
+/// Decode per-100 g amounts. A nutrient this build does not know fails the
+/// decode: the row reads as undecodable instead of losing that nutrient when
+/// it is rewritten.
 pub(crate) fn decode_nutrients(bytes: &[u8]) -> Result<Nutrients, TlvError> {
     let record = Tlv::decode(bytes, NUTRIENTS_LIMIT)?;
     let mut nutrients = Nutrients::default();
     for tag in record.tags() {
-        if let Some(nutrient) = Nutrient::from_code(tag)
-            && let Some(amount) = record.uint(tag)?
-        {
+        let nutrient = Nutrient::from_code(tag).ok_or(TlvError::Malformed { tag })?;
+        if let Some(amount) = record.uint(tag)? {
             nutrients = nutrients.with(nutrient, amount);
         }
     }
@@ -61,10 +61,26 @@ fn put_list(record: &mut Tlv, tag: u16, items: impl IntoIterator<Item = Tlv>) ->
     Ok(())
 }
 
+/// Fail on a tag outside `known`: a routine written by a newer build is shown
+/// whole or not at all, never silently stripped when saved again.
+fn known_tags(record: &Tlv, known: &[u16]) -> Result<(), TlvError> {
+    record
+        .tags()
+        .find(|tag| !known.contains(tag))
+        .map_or(Ok(()), |tag| Err(TlvError::Malformed { tag }))
+}
 fn list(record: &Tlv, tag: u16) -> Result<Vec<Tlv>, TlvError> {
     let Some(list) = record.record(tag, ROUTINE_LIMIT)? else {
         return Ok(Vec::new());
     };
+    // Positions are 1..=n with no gaps.
+    if list
+        .tags()
+        .zip(1_u16..)
+        .any(|(position, expected)| position != expected)
+    {
+        return Err(TlvError::Malformed { tag });
+    }
     list.tags()
         .map(|position| {
             list.record(position, ROUTINE_LIMIT)?
@@ -126,6 +142,7 @@ fn encode_item(item: &RoutineItem) -> Tlv {
 }
 
 fn decode_item(record: &Tlv) -> Result<RoutineItem, TlvError> {
+    known_tags(record, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])?;
     let reps = match (narrow::<u16>(record, 4)?, narrow::<u16>(record, 5)?) {
         (Some(min), Some(max)) if min <= max => Some((min, max)),
         (None, None) => None,
@@ -191,10 +208,13 @@ pub(crate) fn encode_routine(content: &RoutineContent) -> Result<Vec<u8>, Error>
 /// routine is shown whole or not at all.
 pub(crate) fn decode_routine(bytes: &[u8]) -> Result<RoutineContent, TlvError> {
     let record = Tlv::decode(bytes, ROUTINE_LIMIT)?;
+    known_tags(&record, &[1])?;
     let mut content = RoutineContent::default();
     for day in list(&record, 1)? {
+        known_tags(&day, &[1, 2])?;
         let mut blocks = Vec::new();
         for block in list(&day, 2)? {
+            known_tags(&block, &[1, 2, 3])?;
             let items = list(&block, 3)?
                 .iter()
                 .map(decode_item)
@@ -272,13 +292,17 @@ mod tests {
     }
 
     #[test]
-    fn nutrients_round_trip_and_skip_unknown_tags() -> Result<(), TlvError> {
+    fn nutrients_round_trip_and_reject_unknown_tags() -> Result<(), TlvError> {
         let nutrients = Nutrients::default()
             .with(Nutrient::Energy, 544_000)
             .with(Nutrient::Protein, 31_000);
         let mut record = Tlv::decode(&encode_nutrients(&nutrients), NUTRIENTS_LIMIT)?;
-        record.put_uint(999, 5);
         assert_eq!(decode_nutrients(&record.encode())?, nutrients);
+        record.put_uint(999, 5);
+        assert_eq!(
+            decode_nutrients(&record.encode()),
+            Err(TlvError::Malformed { tag: 999 })
+        );
         Ok(())
     }
 
@@ -299,5 +323,16 @@ mod tests {
         let mut root = Tlv::default();
         root.put_record(1, &days);
         assert!(decode_routine(&root.encode()).is_err());
+    }
+
+    #[test]
+    fn routines_with_tags_from_a_newer_build_are_rejected() -> Result<(), Error> {
+        let mut root = Tlv::decode(&encode_routine(&sample())?, ROUTINE_LIMIT)?;
+        root.put_uint(9, 1);
+        assert_eq!(
+            decode_routine(&root.encode()),
+            Err(TlvError::Malformed { tag: 9 })
+        );
+        Ok(())
     }
 }

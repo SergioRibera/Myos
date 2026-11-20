@@ -32,7 +32,8 @@ CREATE TABLE sync_state (
 -- One entry per row with unpushed changes. The payload is built from the row
 -- when pushing, so coalesced writes always send the latest state.
 CREATE TABLE sync_outbox (
-  seq        INTEGER PRIMARY KEY,
+  -- AUTOINCREMENT: a coalesced write moves to a new, never reused, seq.
+  seq        INTEGER PRIMARY KEY AUTOINCREMENT,
   op_id      BLOB NOT NULL UNIQUE CHECK (length(op_id) = 16),
   entity     INTEGER NOT NULL CHECK (entity BETWEEN 1 AND 65535),
   row_id     BLOB NOT NULL CHECK (length(row_id) = 16),

@@ -584,3 +584,59 @@ CREATE TABLE routine_item_index (version_id BLOB, item_id BLOB, exercise_id BLOB
 - Minimum age 16; no parental-consent flow.
 - Professionals read client data online only (server-side, audited); their
   own notes, routines and plans work offline.
+
+## 10. Implementation notes (v1)
+
+Where `crates/store` refines or departs from the sections above.
+
+- **Migrations stay editable until the first release.** Nothing ships yet, so
+  `0001`/`0002` are amended in place; after release they are frozen and only
+  appended to.
+- **Merge granularity.** v1 writes whole rows: every local write sets
+  `field_hlc = NULL` ("every field at the row hlc"), so all synced tables
+  merge per row. Per-field merge for header tables (`profile`, `preferences`,
+  `workout_session`, `meal`, `routine`) needs the sync payload tags and lands
+  with the sync protocol.
+- **Outbox order.** A coalesced write moves its entry to the end of the queue
+  (`seq INTEGER PRIMARY KEY AUTOINCREMENT`, never reused) with a fresh
+  `op_id`; writers enqueue a parent after the children it references (meal
+  header after its items, routine head after its new version).
+- **Restores.** An explicit write to a tombstoned natural-key row
+  (`profile`, `preferences`, `profile_goal`) clears `deleted_at` and queues
+  `op = restore`.
+- **Strict structured columns.** TLV decoders of nutrients and routine
+  content reject tags or codes they do not know: the row reads as
+  undecodable (or the routine fails to open) instead of losing data when an
+  older build rewrites it. TLV varints must be canonical and tag 0 is
+  reserved.
+- **Meal item generations.** `meal.items_gen` / `meal_item.generation`
+  (16-byte ids): replacing a meal's items mints a new generation and only
+  items of the header's current generation count, so concurrent replacements
+  from two devices end with one list, not both. `meal_item.portion_label`
+  replaces `portion_id` / `portion_qty_milli`.
+- **Extra tables in 0002.** `custom_food` (+ `custom_food_portion`),
+  `recipe` (+ `recipe_item`), `nutrition_plan` + `nutrition_plan_version`
+  (head + immutable TLV content, like routines), `equipment_profile`
+  (+ item, no unique default), `attachment`, `reminder`. No unique index on
+  `volume_range_override` or `external_activity`: rows minted under
+  different pre-login keys coexist until the login rewrite; reads take the
+  newest by `(hlc, node)`.
+- **Routine versions.** `routine_version.n` is not unique across devices;
+  order by `(n, hlc, node)`. A head whose current version has not synced yet
+  reads the newest version present. `Copy` keeps `upstream_id` but no
+  `followed_version_id`; only `Follow` tracks the upstream version.
+- **Calibration.** `calibration_result` stores `protocol`, `value` and
+  `unit` (grams, reps, ms, meters); there is no separate `kind`.
+- **`derived.db` (schema 1).** `derived_meta` (schema, watermark on
+  `local_seq`, load model, catalog version), `e1rm(exercise_id, day,
+  formula, value_g, session_id, flags)`, `week_volume(week_day, model,
+  muscle, left_milli, right_milli)` and `week_summary` (counted, assumed and
+  skipped set counts). Refresh recomputes the days touched since the
+  watermark (sets, sessions, and every day using a changed user exercise)
+  and every week from the earliest of them on, since a new estimate moves
+  later intensity references. A different load model or catalog version, or
+  an unreadable file, rebuilds everything.
+- **Reads.** Multi-statement reads (`sessions_in`, `meals_in`) run in one
+  read transaction. Rows with unknown codes, out-of-range values or invalid
+  instants are counted as undecodable, never fatal; body measurements are
+  re-validated on read.

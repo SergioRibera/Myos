@@ -531,8 +531,10 @@ impl Store {
     pub fn sessions_in(&self, span: DaySpan) -> Result<SessionsRead, Error> {
         let first = day_number(span.first())?;
         let last = day_number(span.last())?;
+        // One read transaction: sessions and sets from the same snapshot.
+        let tx = self.conn().unchecked_transaction()?;
 
-        let mut statement = self.conn().prepare_cached(
+        let mut statement = tx.prepare_cached(
             "SELECT id, started_at, day FROM workout_session
              WHERE deleted_at IS NULL AND day BETWEEN ?1 AND ?2
              ORDER BY started_at, id",
@@ -559,7 +561,7 @@ impl Store {
             });
         }
 
-        let mut statement = self.conn().prepare_cached(&format!(
+        let mut statement = tx.prepare_cached(&format!(
             "SELECT s.session_id, {SET_COLUMNS}
              FROM set_entry s JOIN workout_session w ON w.id = s.session_id
              WHERE s.deleted_at IS NULL AND w.deleted_at IS NULL AND w.day BETWEEN ?1 AND ?2

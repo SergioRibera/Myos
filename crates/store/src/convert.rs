@@ -10,6 +10,9 @@ use crate::Error;
 /// Days are stored as days since 1970-01-01, within `0 ..= 73000` (~2169).
 pub(crate) const MAX_DAY: i64 = 73_000;
 
+/// Latest stored instant: 9999-12-31T23:59:59.999Z (instants are Unix ms).
+pub(crate) const MAX_INSTANT_MS: i64 = 253_402_300_799_999;
+
 const EPOCH: Date = jiff::civil::date(1970, 1, 1);
 
 /// Stored day number of `day`.
