@@ -615,6 +615,8 @@ Where `crates/store` refines or departs from the sections above.
   older build rewrites it. TLV varints must be canonical and tag 0 is
   reserved.
 - **Meal item generations.** `meal.items_gen` / `meal_item.generation`
+  (a replace with the same items keeps the generation and the items, so a
+  header-only edit never beats a concurrent item edit)
   (16-byte ids): replacing a meal's items mints a new generation and only
   items of the header's current generation count, so concurrent replacements
   from two devices end with one list, not both. `meal_item.portion_label`

@@ -10,7 +10,7 @@ use myos_core::diet::{
 };
 use myos_core::id::Id;
 use myos_core::volume::DaySpan;
-use rusqlite::{Row, Transaction, params};
+use rusqlite::{OptionalExtension, Row, Transaction, params};
 use uuid::Uuid;
 
 use crate::content::{decode_nutrients, encode_nutrients};
@@ -104,6 +104,66 @@ fn validate_meal(meal: &Meal, tz_offset_min: i16) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// The meal's current item generation when its live items equal `items`
+/// (same foods, amounts and snapshots, same order).
+fn same_items(tx: &Transaction<'_>, meal: Uuid, items: &[MealItem]) -> Result<Option<Uuid>, Error> {
+    type ItemRow = (
+        i64,
+        Option<[u8; 16]>,
+        Option<String>,
+        i64,
+        String,
+        Option<String>,
+        Vec<u8>,
+    );
+    let Some(generation) = tx
+        .query_row(
+            "SELECT items_gen FROM meal WHERE id = ?1 AND deleted_at IS NULL",
+            [meal.as_bytes().as_slice()],
+            |row| row.get::<_, Option<[u8; 16]>>(0),
+        )
+        .optional()?
+        .flatten()
+    else {
+        return Ok(None);
+    };
+    let stored: Vec<ItemRow> = tx
+        .prepare_cached(
+            "SELECT food_src, food_id, barcode, grams_mg, name_snapshot, brand_snapshot, nutrients
+             FROM meal_item WHERE meal_id = ?1 AND generation = ?2 AND deleted_at IS NULL
+             ORDER BY position, id",
+        )?
+        .query_map(
+            params![meal.as_bytes().as_slice(), generation.as_slice()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )?
+        .collect::<Result<_, _>>()?;
+    let wanted = items.iter().map(|item| {
+        let (src, food_id, barcode) = food_columns(&item.food);
+        (
+            i64::from(src),
+            food_id,
+            barcode.map(str::to_owned),
+            i64::from(item.grams_mg),
+            item.name.clone(),
+            item.brand.clone(),
+            encode_nutrients(&item.density),
+        )
+    });
+    let same = stored.len() == items.len() && stored.into_iter().eq(wanted);
+    Ok(same.then(|| Uuid::from_bytes(generation)))
 }
 
 fn insert_items(
@@ -223,8 +283,14 @@ impl Store {
         let day = day_number(meal.day)?;
         let id = meal_id.uuid();
         let (mode, quick_size, quick_protein) = content_columns(&meal.content);
-        let generation = Uuid::now_v7();
         self.write(|tx, stamp| {
+            // Unchanged items keep their generation: a header-only edit must
+            // not beat a concurrent item edit from another device.
+            let kept = match &meal.content {
+                MealContent::Detailed(items) => same_items(tx, id, items)?,
+                MealContent::Quick { .. } => None,
+            };
+            let generation = kept.unwrap_or_else(Uuid::now_v7);
             let changed = tx.execute(
                 "UPDATE meal SET eaten_at = ?2, day = ?3, tz_offset_min = ?4, slot = ?5,
                    mode = ?6, quick_size = ?7, quick_protein = ?8, note = ?9, items_gen = ?13,
@@ -248,6 +314,9 @@ impl Store {
             )?;
             if changed == 0 {
                 return Err(Error::NotFound("live meal"));
+            }
+            if kept.is_some() {
+                return sync::enqueue(tx, Entity::Meal, id, Op::Upsert, stamp);
             }
             let old: Vec<[u8; 16]> = tx
                 .prepare_cached(

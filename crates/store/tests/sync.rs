@@ -661,6 +661,9 @@ fn a_note_edit_does_not_undo_a_concurrent_item_replacement() {
     let MealContent::Detailed(items) = &on_phone.meals[0].1.content else {
         panic!("detailed meal expected");
     };
-    // One list (no doubled items); both devices agree on it.
+    // One list (no doubled items); the note-only edit kept the generation,
+    // so the item replacement and the note both survive.
     assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "Pollo");
+    assert_eq!(on_phone.meals[0].1.note.as_deref(), Some("sin sal"));
 }
