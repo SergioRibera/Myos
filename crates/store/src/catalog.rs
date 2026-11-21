@@ -252,15 +252,25 @@ impl Store {
         Ok(())
     }
 
-    /// Swap in a new version of a reference file: detach, move `next` over
-    /// `current` (atomic rename, same directory) and attach it. `next` must
-    /// already be verified.
+    /// Swap in a new version of a reference file: check that `next` attaches,
+    /// detach, move it over `current` (atomic rename, same directory) and
+    /// attach it. A `next` that does not attach is deleted and `current`
+    /// stays in use. `next` must already be verified (signature, hash).
     pub fn replace_reference(
         &mut self,
         reference: Reference,
         next: &Path,
         current: &Path,
     ) -> Result<ReferenceInfo, Error> {
+        // Validate the new file first: a file this build cannot read (newer
+        // schema, damage) is deleted and the current one stays attached.
+        if let Err(err) = self.attach_reference(reference, next) {
+            let _removed = std::fs::remove_file(next);
+            if current.is_file() {
+                self.attach_reference(reference, current)?;
+            }
+            return Err(err);
+        }
         self.detach_reference(reference)?;
         std::fs::rename(next, current).map_err(Error::Io)?;
         self.attach_reference(reference, current)

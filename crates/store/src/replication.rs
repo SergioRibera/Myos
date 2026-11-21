@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use myos_core::code::Code;
 use rusqlite::types::Value;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::payload::{self, Columns, RowStamp};
@@ -151,7 +151,7 @@ fn requeue_in_flight(tx: &Transaction<'_>, delay: Option<i64>) -> Result<(), Err
 impl Store {
     /// Return entries a crash left in flight to the queue (run at open).
     pub(crate) fn recover_in_flight(conn: &mut Connection) -> Result<(), Error> {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         requeue_in_flight(&tx, None)?;
         tx.commit()?;
         Ok(())
@@ -173,7 +173,9 @@ impl Store {
             Some(_) => return Err(Error::AccountMismatch),
             None => {}
         }
-        let tx = self.conn_mut().transaction()?;
+        let tx = self
+            .conn_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let rows: Vec<([u8; 16], i64)> = tx
             .prepare("SELECT id, from_day FROM profile_goal")?
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -275,7 +277,9 @@ impl Store {
         let response = match transport.push(&batch) {
             Ok(response) => response,
             Err(err) => {
-                let tx = self.conn_mut().transaction()?;
+                let tx = self
+                    .conn_mut()
+                    .transaction_with_behavior(TransactionBehavior::Immediate)?;
                 requeue_in_flight(&tx, Some(0))?;
                 tx.commit()?;
                 return Err(Error::Transport(Box::new(err)));
@@ -294,7 +298,9 @@ impl Store {
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let tx = self.conn_mut().transaction()?;
+        let tx = self
+            .conn_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Anything still in flight here was left by a failed acknowledgement.
         requeue_in_flight(&tx, None)?;
         let entries: Vec<Entry> = tx
@@ -367,7 +373,9 @@ impl Store {
         sent: i64,
         report: &mut SyncReport,
     ) -> Result<(), Error> {
-        let tx = self.conn_mut().transaction()?;
+        let tx = self
+            .conn_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for outcome in &response.outcomes {
             let Some(op) = batch.ops.iter().find(|op| op.op_id == outcome.op_id) else {
                 continue;
@@ -441,7 +449,9 @@ impl Store {
         let page = transport
             .pull(STREAM_OWN, cursor, PULL_PAGE)
             .map_err(|err| Error::Transport(Box::new(err)))?;
-        let mut tx = self.conn_mut().transaction()?;
+        let mut tx = self
+            .conn_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         update_clock(&tx, page.server_time_ms, sent, page.min_proto, report)?;
         if report.read_only {
             // An old build stops applying rows it may misread.

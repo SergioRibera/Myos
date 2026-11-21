@@ -259,3 +259,19 @@ fn english_names_answer_when_a_language_has_none() {
     let hits = store.search_exercises("bench", "de", 5).unwrap();
     assert_eq!(hits[0].name, "Bench press");
 }
+
+#[test]
+fn an_unreadable_replacement_keeps_the_current_file() {
+    let dir = Dir::new();
+    let current = dir.path("catalog.db");
+    let next = dir.path("catalog.next.db");
+    build_catalog(&current, 1);
+    std::fs::write(&next, b"not a database").unwrap();
+    let mut store = store();
+    store
+        .attach_reference(Reference::Catalog, &current)
+        .unwrap();
+    assert!(store.replace_catalog(&next, &current).is_err());
+    assert!(!next.exists());
+    assert_eq!(store.catalog().unwrap().version, 1);
+}
