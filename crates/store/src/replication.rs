@@ -20,14 +20,14 @@ use uuid::Uuid;
 use crate::payload::{self, Columns, RowStamp};
 use crate::spec::{self, TableSpec};
 use crate::sync::{Entity, Op, sql_hlc};
+use crate::tlv::Tlv;
 use crate::{Error, Hlc, Store, ids};
+use myos_sync_wire::merge::{self, Outcome, Version};
 
-/// Protocol version this build speaks.
-pub const PROTO: u32 = 1;
-/// Version of the payload layout ([`crate`] spec tags).
-pub const PAYLOAD_VERSION: u16 = 1;
-/// Own data stream.
-pub const STREAM_OWN: u16 = 1;
+pub use myos_sync_wire::protocol::{
+    PAYLOAD_VERSION, PROTO, PullPage, PushBatch, PushOp, PushOutcome, PushResponse, PushResult,
+    RemoteRow, STREAM_OWN,
+};
 
 /// Largest push batch.
 const PUSH_BATCH: u32 = 500;
@@ -54,114 +54,6 @@ const ERROR_NEEDS_UPDATE: i64 = 1;
 const UNKNOWN_ENTITY: i64 = 1;
 const UNDECODABLE: i64 = 2;
 const CONSTRAINT: i64 = 3;
-
-/// One outbox row sent to the server.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PushOp {
-    /// Idempotency key.
-    pub op_id: Uuid,
-    /// Entity code.
-    pub entity: u16,
-    /// Row id.
-    pub row_id: Uuid,
-    /// Operation code.
-    pub op: u16,
-    /// Clock of the write.
-    pub hlc: u64,
-    /// Writer node (signed on both sides).
-    pub node: i64,
-    /// Payload layout version.
-    pub payload_ver: u16,
-    /// Row payload (TLV).
-    pub payload: Vec<u8>,
-}
-
-/// A push request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PushBatch {
-    /// Sending device.
-    pub device_id: Uuid,
-    /// Protocol version.
-    pub proto: u32,
-    /// Rows, in queue order.
-    pub ops: Vec<PushOp>,
-}
-
-/// What the server did with one op.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PushResult {
-    /// Stored as the current version of the row.
-    Applied {
-        /// Revision assigned.
-        server_rev: i64,
-    },
-    /// The server holds a version that wins; it arrives by pull.
-    Superseded {
-        /// Revision of the winning version.
-        server_rev: i64,
-    },
-    /// Refused (validation, permissions); kept locally as failed.
-    Rejected {
-        /// Reason code.
-        code: u16,
-    },
-}
-
-/// Answer for one op.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PushOutcome {
-    /// The op answered.
-    pub op_id: Uuid,
-    /// What happened.
-    pub result: PushResult,
-}
-
-/// A push response.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PushResponse {
-    /// One outcome per op (missing ones are retried).
-    pub outcomes: Vec<PushOutcome>,
-    /// Server clock, Unix ms.
-    pub server_time_ms: i64,
-    /// Oldest protocol the server still accepts writes from.
-    pub min_proto: u32,
-}
-
-/// One row of the change feed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteRow {
-    /// Entity code.
-    pub entity: u16,
-    /// Row id.
-    pub row_id: Uuid,
-    /// Operation code of the version.
-    pub op: u16,
-    /// Clock of the version.
-    pub hlc: u64,
-    /// Writer node.
-    pub node: i64,
-    /// Revision (unique per row version, increasing).
-    pub server_rev: i64,
-    /// Payload layout version.
-    pub payload_ver: u16,
-    /// Row payload (TLV).
-    pub payload: Vec<u8>,
-}
-
-/// A page of the change feed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PullPage {
-    /// Rows, by increasing revision.
-    pub rows: Vec<RemoteRow>,
-    /// Cursor for the next page.
-    pub next: i64,
-    /// Whether more rows follow.
-    pub more: bool,
-    /// Server clock, Unix ms.
-    pub server_time_ms: i64,
-    /// Oldest protocol the server still accepts writes from.
-    pub min_proto: u32,
-}
 
 /// The network side of sync.
 pub trait Transport {
@@ -196,7 +88,6 @@ pub struct SyncReport {
 struct Local {
     hlc: i64,
     node: i64,
-    deleted: bool,
     day: Option<i64>,
     server_rev: Option<i64>,
 }
@@ -483,22 +374,12 @@ impl Store {
             };
             let op_id = op.op_id.as_bytes().as_slice();
             match outcome.result {
-                PushResult::Applied { server_rev } => {
+                // The server may have merged the op with fields from other
+                // devices, so the revision is not recorded here: the stored
+                // version comes back by pull and is recorded (or applied)
+                // then.
+                PushResult::Applied { .. } => {
                     tx.execute("DELETE FROM sync_outbox WHERE op_id = ?1", [op_id])?;
-                    if let Some(spec) = Entity::from_code(op.entity).and_then(spec::of) {
-                        // Only if no newer local write happened meanwhile.
-                        tx.execute(
-                            &format!(
-                                "UPDATE {} SET server_rev = ?2 WHERE id = ?1 AND hlc = ?3",
-                                spec.table
-                            ),
-                            params![
-                                op.row_id.as_bytes().as_slice(),
-                                server_rev,
-                                sql_hlc(Hlc::from_raw(op.hlc))?
-                            ],
-                        )?;
-                    }
                     report.pushed += 1;
                 }
                 PushResult::Superseded { .. } => {
@@ -678,15 +559,17 @@ fn apply_remote(
         Some(members) => Some(Columns::of(conn, members.table)?),
         None => None,
     };
-    let decoded = payload::decode(&row.payload, spec, &columns, member_columns.as_ref())?;
-    let hlc = i64::try_from(row.hlc).map_err(|_| ApplyError::Quarantine(UNDECODABLE))?;
-    let remote_op = Op::from_code(row.op).ok_or(ApplyError::Quarantine(UNDECODABLE))?;
-    let remote_deleted = !matches!(decoded.deleted_at, Value::Null);
+    let remote_record = Tlv::decode(&row.payload, payload::PAYLOAD_LIMIT)
+        .map_err(|_| ApplyError::Quarantine(UNDECODABLE))?;
+    let mut decoded = payload::decode(&row.payload, spec, &columns, member_columns.as_ref())?;
+    let mut hlc = i64::try_from(row.hlc).map_err(|_| ApplyError::Quarantine(UNDECODABLE))?;
+    let mut node = row.node;
+    Op::from_code(row.op).ok_or(ApplyError::Quarantine(UNDECODABLE))?;
 
     let local = read_local(conn, spec, row.row_id)?;
     // Failed entries (rejected, needs update) do not compete: the server
     // refused them or this build cannot see the newer row.
-    let pending: Option<i64> = conn
+    let pending: Option<u16> = conn
         .query_row(
             "SELECT op FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state < 2
              ORDER BY state = 0 DESC, seq DESC LIMIT 1",
@@ -695,15 +578,9 @@ fn apply_remote(
         )
         .optional()?;
 
+    // Whether a local change survives the merge and still has to be pushed.
+    let mut keep_outbox = false;
     if let Some(local) = &local {
-        if (local.hlc, local.node) == (hlc, row.node) {
-            // Our own write coming back: just record the revision.
-            conn.execute(
-                &format!("UPDATE {} SET server_rev = ?2 WHERE id = ?1", spec.table),
-                params![row.row_id.as_bytes().as_slice(), row.server_rev],
-            )?;
-            return Ok(false);
-        }
         if local
             .server_rev
             .is_some_and(|known| row.server_rev <= known)
@@ -711,23 +588,52 @@ fn apply_remote(
             // An older revision than the one already applied.
             return Ok(false);
         }
-    }
-
-    if let (Some(local), Some(pending)) = (&local, pending) {
-        let newer = (hlc, row.node) > (local.hlc, local.node);
-        let local_restore = pending == i64::from(Op::Restore.code());
-        let wins = match (local.deleted, remote_deleted) {
-            (false, true) => !local_restore || newer,
-            (true, false) => remote_op == Op::Restore && newer,
-            _ => newer,
-        };
-        if !wins {
+        let local_record = payload::build_record(conn, spec, row.row_id)?.unwrap_or_default();
+        if local_record == remote_record {
+            // Our own write coming back (or a no-op): record the revision.
+            conn.execute(
+                &format!("UPDATE {} SET server_rev = ?2 WHERE id = ?1", spec.table),
+                params![row.row_id.as_bytes().as_slice(), row.server_rev],
+            )?;
             return Ok(false);
         }
+        if let Some(pending) = pending {
+            // An unpushed local change: the shared rules decide.
+            let stored = Version {
+                op: pending,
+                hlc: u64::try_from(local.hlc).unwrap_or(0),
+                node: local.node,
+                payload: &local_record,
+            };
+            let incoming = Version {
+                op: row.op,
+                hlc: row.hlc,
+                node: row.node,
+                payload: &remote_record,
+            };
+            match merge::resolve(&stored, &incoming)
+                .map_err(|_| ApplyError::Quarantine(UNDECODABLE))?
+            {
+                Outcome::KeepStored => return Ok(false),
+                Outcome::TakeIncoming => {}
+                Outcome::Merged {
+                    payload: merged,
+                    hlc: merged_hlc,
+                    node: merged_node,
+                } => {
+                    decoded =
+                        payload::decode(&merged.encode(), spec, &columns, member_columns.as_ref())?;
+                    hlc = i64::try_from(merged_hlc)
+                        .map_err(|_| ApplyError::Quarantine(UNDECODABLE))?;
+                    node = merged_node;
+                    keep_outbox = true;
+                }
+            }
+        }
+        // Without an unpushed change the server version is the truth.
     }
 
     *local_seq += 1;
-    let has_field_hlc = columns_has(conn, spec.table, "field_hlc")?;
     payload::write(
         conn,
         spec,
@@ -735,24 +641,44 @@ fn apply_remote(
         &decoded,
         RowStamp {
             hlc,
-            node: row.node,
+            node,
             server_rev: row.server_rev,
             local_seq: *local_seq,
         },
-        has_field_hlc,
     )?;
-    // The remote version wins: unpushed local changes of the row are moot,
-    // and older quarantined versions of it must never be replayed.
-    conn.execute(
-        "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state < 2",
-        params![row.entity, row.row_id.as_bytes().as_slice()],
-    )?;
+    if keep_outbox {
+        // The merge kept local fields the server lacks: push the merged row.
+        conn.execute(
+            "UPDATE sync_outbox SET hlc = ?3 WHERE entity = ?1 AND row_id = ?2 AND state < 2",
+            params![row.entity, row.row_id.as_bytes().as_slice(), hlc],
+        )?;
+    } else {
+        // The remote version wins: unpushed local changes of the row are moot.
+        conn.execute(
+            "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state < 2",
+            params![row.entity, row.row_id.as_bytes().as_slice()],
+        )?;
+    }
+    after_apply(conn, spec, row, &decoded, local.and_then(|local| local.day))?;
+    Ok(true)
+}
+
+/// Bookkeeping after a remote row was written: quarantine, derived-data
+/// days, exercise index.
+fn after_apply(
+    conn: &Connection,
+    spec: &TableSpec,
+    row: &RemoteRow,
+    decoded: &payload::Decoded,
+    old_day: Option<i64>,
+) -> Result<(), ApplyError> {
+    // Older quarantined versions of the row must never be replayed.
     conn.execute(
         "DELETE FROM sync_quarantine WHERE entity = ?1 AND row_id = ?2 AND server_rev < ?3",
         params![row.entity, row.row_id.as_bytes().as_slice(), row.server_rev],
     )?;
     // Derived data of the day the row left.
-    if let Some(old_day) = local.and_then(|local| local.day)
+    if let Some(old_day) = old_day
         && decoded.value(spec, "day") != Some(&Value::Integer(old_day))
     {
         conn.execute(
@@ -775,21 +701,13 @@ fn apply_remote(
             params![exercise, source],
         )?;
     }
-    Ok(true)
-}
-
-fn columns_has(conn: &Connection, table: &str, column: &str) -> Result<bool, Error> {
-    Ok(conn.query_row(
-        "SELECT count(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2",
-        params![table, column],
-        |row| row.get(0),
-    )?)
+    Ok(())
 }
 
 fn read_local(conn: &Connection, spec: &TableSpec, id: Uuid) -> Result<Option<Local>, Error> {
     let has_day = spec.columns.contains(&"day");
     let sql = format!(
-        "SELECT hlc, node, deleted_at IS NOT NULL, {}, server_rev FROM {} WHERE id = ?1",
+        "SELECT hlc, node, {}, server_rev FROM {} WHERE id = ?1",
         if has_day { "day" } else { "NULL" },
         spec.table
     );
@@ -798,9 +716,9 @@ fn read_local(conn: &Connection, spec: &TableSpec, id: Uuid) -> Result<Option<Lo
             Ok(Local {
                 hlc: row.get(0)?,
                 node: row.get(1)?,
-                deleted: row.get(2)?,
-                day: row.get(3)?,
-                server_rev: row.get(4)?,
+
+                day: row.get(2)?,
+                server_rev: row.get(3)?,
             })
         })
         .optional()?)

@@ -21,7 +21,7 @@ mod replication;
 mod routines;
 mod spec;
 mod sync;
-pub mod tlv;
+pub use myos_sync_wire::tlv;
 mod training;
 
 use std::path::{Path, PathBuf};

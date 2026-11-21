@@ -148,7 +148,7 @@ impl Store {
                    birth_year = excluded.birth_year, sex = excluded.sex,
                    height_mm = excluded.height_mm, hlc = excluded.hlc,
                    node = excluded.node, local_seq = excluded.local_seq,
-                   deleted_at = NULL, field_hlc = NULL",
+                   deleted_at = NULL",
                 params![
                     id.as_bytes().as_slice(),
                     profile.birth_year,
@@ -218,7 +218,7 @@ impl Store {
                    unit_distance = excluded.unit_distance, unit_energy = excluded.unit_energy,
                    effort_scale = excluded.effort_scale, diet_mode = excluded.diet_mode,
                    locale = excluded.locale, hlc = excluded.hlc, node = excluded.node,
-                   local_seq = excluded.local_seq, deleted_at = NULL, field_hlc = NULL",
+                   local_seq = excluded.local_seq, deleted_at = NULL",
                 params![
                     id.as_bytes().as_slice(),
                     preferences.theme.code(),

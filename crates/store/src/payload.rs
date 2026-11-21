@@ -124,14 +124,25 @@ pub(crate) fn build(
     spec: &TableSpec,
     id: Uuid,
 ) -> Result<Option<Vec<u8>>, Error> {
+    Ok(build_record(conn, spec, id)?.map(|record| record.encode()))
+}
+
+/// [`build`] as a record (with the stored field clocks at
+/// [`TAG_FIELD_HLC`] for tables merged per field).
+pub(crate) fn build_record(
+    conn: &Connection,
+    spec: &TableSpec,
+    id: Uuid,
+) -> Result<Option<Tlv>, Error> {
     let sql = format!(
-        "SELECT deleted_at, extra, {} FROM {} WHERE id = ?1",
+        "SELECT deleted_at, extra, {}, {} FROM {} WHERE id = ?1",
+        if spec.per_field { "field_hlc" } else { "NULL" },
         spec.columns.join(", "),
         spec.table
     );
     let row: Option<Vec<Value>> = conn
         .query_row(&sql, [id.as_bytes().as_slice()], |row| {
-            (0..spec.columns.len() + 2)
+            (0..spec.columns.len() + 3)
                 .map(|at| row.get::<_, Value>(at))
                 .collect()
         })
@@ -141,14 +152,15 @@ pub(crate) fn build(
     };
     let mut record = Tlv::default();
     put_value(&mut record, TAG_DELETED_AT, &values[0]);
-    for (index, value) in values[2..].iter().enumerate() {
+    for (index, value) in values[3..].iter().enumerate() {
         put_value(&mut record, TableSpec::tag(index), value);
     }
     if let Some(members) = spec.members {
         record.put_record(TAG_MEMBERS, &build_members(conn, members, id)?);
     }
+    put_value(&mut record, TAG_FIELD_HLC, &values[2]);
     fill_extra(&mut record, &values[1])?;
-    Ok(Some(record.encode()))
+    Ok(Some(record))
 }
 
 fn build_members(conn: &Connection, members: Members, id: Uuid) -> Result<Tlv, Error> {
@@ -190,6 +202,8 @@ pub(crate) struct Decoded {
     pub(crate) members: Vec<(Vec<Value>, Value)>,
     /// Unknown tags, stored in `extra` (replacing what was there).
     pub(crate) extra: Value,
+    /// Field clocks record (tag 999), stored in `field_hlc`.
+    pub(crate) field_clocks: Value,
 }
 
 impl Decoded {
@@ -256,6 +270,9 @@ pub(crate) fn decode(
         values,
         members,
         extra: encode_unknown(&record.unknown(&known)),
+        field_clocks: record
+            .bytes(TAG_FIELD_HLC)
+            .map_or(Value::Null, |bytes| Value::Blob(bytes.to_vec())),
     })
 }
 
@@ -277,40 +294,33 @@ pub(crate) fn write(
     id: Uuid,
     decoded: &Decoded,
     stamp: RowStamp,
-    has_field_hlc: bool,
 ) -> Result<(), Error> {
-    let placeholders: Vec<String> = (1..=spec.columns.len() + 7)
-        .map(|n| format!("?{n}"))
-        .collect();
-    let mut updates: Vec<String> = spec
-        .columns
+    let mut columns: Vec<&str> = spec.columns.to_vec();
+    columns.extend([
+        "deleted_at",
+        "extra",
+        "hlc",
+        "node",
+        "server_rev",
+        "local_seq",
+    ]);
+    if spec.per_field {
+        columns.push("field_hlc");
+    }
+    let placeholders: Vec<String> = (1..=columns.len() + 1).map(|n| format!("?{n}")).collect();
+    let updates: Vec<String> = columns
         .iter()
-        .chain(
-            [
-                "deleted_at",
-                "extra",
-                "hlc",
-                "node",
-                "server_rev",
-                "local_seq",
-            ]
-            .iter(),
-        )
         .map(|name| format!("{name} = excluded.{name}"))
         .collect();
-    if has_field_hlc {
-        updates.push("field_hlc = NULL".to_owned());
-    }
     let sql = format!(
-        "INSERT INTO {table} (id, {columns}, deleted_at, extra, hlc, node, server_rev, local_seq)
-         VALUES ({placeholders})
+        "INSERT INTO {table} (id, {columns}) VALUES ({placeholders})
          ON CONFLICT (id) DO UPDATE SET {updates}",
         table = spec.table,
-        columns = spec.columns.join(", "),
+        columns = columns.join(", "),
         placeholders = placeholders.join(", "),
         updates = updates.join(", "),
     );
-    let mut params: Vec<Value> = Vec::with_capacity(spec.columns.len() + 7);
+    let mut params: Vec<Value> = Vec::with_capacity(columns.len() + 1);
     params.push(Value::Blob(id.as_bytes().to_vec()));
     params.extend(decoded.values.iter().cloned());
     params.push(decoded.deleted_at.clone());
@@ -321,6 +331,9 @@ pub(crate) fn write(
         Value::Integer(stamp.server_rev),
         Value::Integer(stamp.local_seq),
     ]);
+    if spec.per_field {
+        params.push(decoded.field_clocks.clone());
+    }
     conn.execute(&sql, params_from_iter(params))?;
     if let Some(members) = spec.members {
         conn.execute(

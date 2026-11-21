@@ -137,6 +137,11 @@ pub(crate) fn enqueue(
     op: Op,
     stamp: Stamp,
 ) -> Result<(), Error> {
+    if let Some(spec) = crate::spec::of(entity)
+        && spec.per_field
+    {
+        restamp_fields(tx, spec, row_id, stamp)?;
+    }
     let previous: Option<u16> = tx
         .query_row(
             "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state = 0
@@ -194,4 +199,27 @@ impl Store {
         })
         .collect()
     }
+}
+
+/// Field clocks of a row merged per field after a local write: fields whose
+/// value changed get the write's clock, the rest keep theirs.
+fn restamp_fields(
+    tx: &Transaction<'_>,
+    spec: &crate::spec::TableSpec,
+    row_id: Uuid,
+    stamp: Stamp,
+) -> Result<(), Error> {
+    let Some(record) = crate::payload::build_record(tx, spec, row_id)? else {
+        return Ok(());
+    };
+    let previous = myos_sync_wire::merge::read_clocks(&record)?;
+    let clocks = myos_sync_wire::merge::restamp(&record, &previous, stamp.hlc.get(), stamp.node);
+    tx.execute(
+        &format!("UPDATE {} SET field_hlc = ?2 WHERE id = ?1", spec.table),
+        (
+            row_id.as_bytes().as_slice(),
+            myos_sync_wire::merge::write_clocks(&clocks).encode(),
+        ),
+    )?;
+    Ok(())
 }

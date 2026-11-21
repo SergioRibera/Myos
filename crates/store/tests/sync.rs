@@ -17,14 +17,13 @@ use myos_core::profile::{Goal, GoalPeriod, Level, Preferences, Profile, Theme};
 use myos_core::session::{Effort, Rir, SessionOrigin, SetRecord};
 use myos_core::units::Mass;
 use myos_core::volume::DaySpan;
+use myos_store::tlv::Tlv;
 use myos_store::{
     DatabaseKey, Error, PullPage, PushBatch, PushOutcome, PushResponse, PushResult, RemoteRow,
     SessionDraft, Store, Transport,
 };
+use myos_sync_wire::merge::{self, Outcome, Version};
 use uuid::Uuid;
-
-const OP_DELETE: u16 = 2;
-const OP_RESTORE: u16 = 3;
 
 #[derive(Debug, Clone)]
 struct Stored {
@@ -34,12 +33,6 @@ struct Stored {
     rev: i64,
     payload_ver: u16,
     payload: Vec<u8>,
-}
-
-impl Stored {
-    const fn deleted(&self) -> bool {
-        self.op == OP_DELETE
-    }
 }
 
 #[derive(Debug, Default)]
@@ -64,36 +57,56 @@ impl Server {
             return PushResult::Rejected { code: 7 };
         }
         let key = (op.entity, op.row_id);
-        let incoming_deleted = op.op == OP_DELETE;
-        // `Some`: the stored version wins and the op is superseded.
-        let result = self.rows.get(&key).and_then(|stored| {
-            let newer = (op.hlc, op.node) > (stored.hlc, stored.node);
-            let wins = match (stored.deleted(), incoming_deleted) {
-                (false, true) => true,
-                (true, false) => op.op == OP_RESTORE && newer,
-                _ => newer,
-            };
-            (!wins).then_some(PushResult::Superseded {
-                server_rev: stored.rev,
-            })
-        });
-        let result = result.unwrap_or_else(|| {
-            self.rev += 1;
-            self.rows.insert(
-                key,
-                Stored {
+        let incoming_payload = Tlv::decode(&op.payload, 1 << 20).unwrap();
+        // The same rules the server runs: `myos_sync_wire::merge`.
+        let decided = self.rows.get(&key).map(|stored| {
+            let stored_payload = Tlv::decode(&stored.payload, 1 << 20).unwrap();
+            let outcome = merge::resolve(
+                &Version {
+                    op: stored.op,
+                    hlc: stored.hlc,
+                    node: stored.node,
+                    payload: &stored_payload,
+                },
+                &Version {
                     op: op.op,
                     hlc: op.hlc,
                     node: op.node,
-                    rev: self.rev,
-                    payload_ver: op.payload_ver,
-                    payload: op.payload.clone(),
+                    payload: &incoming_payload,
                 },
-            );
-            PushResult::Applied {
-                server_rev: self.rev,
-            }
+            )
+            .unwrap();
+            (outcome, stored.rev)
         });
+        let (op_code, hlc, node, payload) = match decided {
+            Some((Outcome::KeepStored, rev)) => {
+                let result = PushResult::Superseded { server_rev: rev };
+                self.receipts.insert(op.op_id, result);
+                return result;
+            }
+            None | Some((Outcome::TakeIncoming, _)) => (op.op, op.hlc, op.node, op.payload.clone()),
+            Some((Outcome::Merged { payload, hlc, node }, _)) => (
+                myos_sync_wire::protocol::op::UPSERT,
+                hlc,
+                node,
+                payload.encode(),
+            ),
+        };
+        self.rev += 1;
+        self.rows.insert(
+            key,
+            Stored {
+                op: op_code,
+                hlc,
+                node,
+                rev: self.rev,
+                payload_ver: op.payload_ver,
+                payload,
+            },
+        );
+        let result = PushResult::Applied {
+            server_rev: self.rev,
+        };
         self.receipts.insert(op.op_id, result);
         result
     }
@@ -409,10 +422,9 @@ fn unknown_entities_and_tags_from_a_newer_build() {
             .values_mut()
             .find(|stored| stored.payload.len() > 30)
             .unwrap();
-        let mut record = Vec::new();
-        record.extend_from_slice(&session_row.payload);
-        record.extend_from_slice(&[98, 1, 7]);
-        session_row.payload = record;
+        let mut record = Tlv::decode(&session_row.payload, 1 << 20).unwrap();
+        record.put_uint(98, 7);
+        session_row.payload = record.encode();
         session_row.rev = rev;
     }
     let report = tablet.sync_once(&mut link).unwrap();
@@ -507,4 +519,124 @@ fn attaching_an_account_rewrites_natural_keys_once() {
     let mut other = device(account);
     other.set_goal(goal).unwrap();
     assert_eq!(other.pending_outbox(10).unwrap()[0].row_id, after);
+}
+
+#[test]
+fn concurrent_edits_of_different_fields_both_survive() {
+    use myos_core::profile::{MassUnit, Sex};
+    use myos_core::units::Length;
+
+    let (mut phone, mut tablet, mut link) = pair();
+    let today = date(2026, 11, 20);
+    let base = Profile {
+        birth_year: Some(1990),
+        ..Profile::default()
+    };
+    phone.set_profile(&base, today).unwrap();
+    phone.set_preferences(&Preferences::default()).unwrap();
+    phone.sync_once(&mut link).unwrap();
+    tablet.sync_once(&mut link).unwrap();
+
+    // Offline, each device edits a different field of the same rows.
+    phone
+        .set_profile(
+            &Profile {
+                height: Some(Length::from_millimeters(1_750)),
+                ..base
+            },
+            today,
+        )
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    tablet
+        .set_profile(
+            &Profile {
+                sex: Some(Sex::Female),
+                ..base
+            },
+            today,
+        )
+        .unwrap();
+    phone
+        .set_preferences(&Preferences {
+            theme: Theme::Dark,
+            ..Preferences::default()
+        })
+        .unwrap();
+    tablet
+        .set_preferences(&Preferences {
+            mass_unit: MassUnit::Pound,
+            ..Preferences::default()
+        })
+        .unwrap();
+
+    for _ in 0..2 {
+        phone.sync_once(&mut link).unwrap();
+        tablet.sync_once(&mut link).unwrap();
+    }
+    let expected = Profile {
+        birth_year: Some(1990),
+        sex: Some(Sex::Female),
+        height: Some(Length::from_millimeters(1_750)),
+    };
+    assert_eq!(phone.profile().unwrap(), expected);
+    assert_eq!(tablet.profile().unwrap(), expected);
+    let preferences = phone.preferences().unwrap();
+    assert_eq!(tablet.preferences().unwrap(), preferences);
+    assert_eq!(
+        (preferences.theme, preferences.mass_unit),
+        (Theme::Dark, MassUnit::Pound)
+    );
+    assert!(phone.pending_outbox(10).unwrap().is_empty());
+    assert!(tablet.pending_outbox(10).unwrap().is_empty());
+}
+
+#[test]
+fn a_note_edit_does_not_undo_a_concurrent_item_replacement() {
+    use myos_core::diet::{FoodRef, Meal, MealContent, MealItem, Nutrients};
+
+    let (mut phone, mut tablet, mut link) = pair();
+    let item = |name: &str| MealItem {
+        food: FoodRef::Catalog(Id::generate()),
+        grams_mg: 100_000,
+        name: name.into(),
+        brand: None,
+        density: Nutrients::default(),
+    };
+    let meal = Meal {
+        eaten_at: Timestamp::from_second(1_795_000_000).unwrap(),
+        day: date(2026, 11, 18),
+        slot: None,
+        content: MealContent::Detailed(vec![item("Arroz")]),
+        note: None,
+    };
+    let id = phone.log_meal(&meal, 0).unwrap();
+    phone.sync_once(&mut link).unwrap();
+    tablet.sync_once(&mut link).unwrap();
+
+    let replaced = Meal {
+        content: MealContent::Detailed(vec![item("Pollo")]),
+        ..meal.clone()
+    };
+    phone.replace_meal(id, &replaced, 0).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let noted = Meal {
+        note: Some("sin sal".into()),
+        ..meal
+    };
+    tablet.replace_meal(id, &noted, 0).unwrap();
+
+    for _ in 0..2 {
+        phone.sync_once(&mut link).unwrap();
+        tablet.sync_once(&mut link).unwrap();
+    }
+    let on_phone = phone.meals_in(week()).unwrap();
+    let on_tablet = tablet.meals_in(week()).unwrap();
+    assert_eq!(on_phone, on_tablet);
+    assert_eq!(on_phone.meals.len(), 1);
+    let MealContent::Detailed(items) = &on_phone.meals[0].1.content else {
+        panic!("detailed meal expected");
+    };
+    // One list (no doubled items); both devices agree on it.
+    assert_eq!(items.len(), 1);
 }

@@ -9,10 +9,9 @@
 
 use crate::Entity;
 
-/// `deleted_at` of the row.
-pub(crate) const TAG_DELETED_AT: u16 = 1;
-/// Per-field clocks (reserved for per-field merge).
-pub(crate) const TAG_FIELD_HLC: u16 = 999;
+/// `deleted_at` of the row (1) and per-field clocks (999), shared with the
+/// server through the wire crate.
+pub(crate) use myos_sync_wire::merge::{TAG_DELETED_AT, TAG_FIELD_CLOCKS as TAG_FIELD_HLC};
 /// Aggregate members: a list record (tag `n` = member `n`).
 pub(crate) const TAG_MEMBERS: u16 = 1000;
 /// Tag of a table's first data column.
@@ -41,6 +40,8 @@ pub(crate) struct TableSpec {
     pub(crate) columns: &'static [&'static str],
     /// Aggregate members, if any.
     pub(crate) members: Option<Members>,
+    /// Merged field by field (the table has `field_hlc`); otherwise whole rows.
+    pub(crate) per_field: bool,
 }
 
 impl TableSpec {
@@ -70,6 +71,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "note",
         ],
         members: None,
+        per_field: true,
     },
     TableSpec {
         entity: Entity::SetEntry,
@@ -99,18 +101,21 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "completed_at",
         ],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::Profile,
         table: "profile",
         columns: &["birth_year", "sex", "height_mm"],
         members: None,
+        per_field: true,
     },
     TableSpec {
         entity: Entity::ProfileGoal,
         table: "profile_goal",
         columns: &["from_day", "goal", "level"],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::Preferences,
@@ -125,6 +130,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "locale",
         ],
         members: None,
+        per_field: true,
     },
     TableSpec {
         entity: Entity::CustomExercise,
@@ -135,18 +141,21 @@ pub(crate) const TABLES: &[TableSpec] = &[
             parent: "exercise_id",
             columns: &["muscle", "role", "weight_bp"],
         }),
+        per_field: false,
     },
     TableSpec {
         entity: Entity::ImportBatch,
         table: "import_batch",
         columns: &["source", "file_sha256", "started_at", "rows", "status"],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::ExternalActivity,
         table: "external_activity",
         columns: &["source", "external_id", "session_id", "imported_at"],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::BodyMeasurement,
@@ -165,6 +174,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "note",
         ],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::CustomFood,
@@ -175,6 +185,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             parent: "food_id",
             columns: &["position", "label", "grams_mg"],
         }),
+        per_field: false,
     },
     TableSpec {
         entity: Entity::Recipe,
@@ -193,6 +204,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
                 "nutrients",
             ],
         }),
+        per_field: false,
     },
     TableSpec {
         entity: Entity::Meal,
@@ -211,6 +223,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "note",
         ],
         members: None,
+        per_field: true,
     },
     TableSpec {
         entity: Entity::MealItem,
@@ -230,6 +243,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "nutrients",
         ],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::Routine,
@@ -243,12 +257,14 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "followed_version_id",
         ],
         members: None,
+        per_field: true,
     },
     TableSpec {
         entity: Entity::RoutineVersion,
         table: "routine_version",
         columns: &["routine_id", "n", "created_at", "content"],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::NutritionPlan,
@@ -262,12 +278,14 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "default_mode",
         ],
         members: None,
+        per_field: true,
     },
     TableSpec {
         entity: Entity::NutritionPlanVersion,
         table: "nutrition_plan_version",
         columns: &["plan_id", "n", "created_at", "content"],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::PlanPhase,
@@ -281,12 +299,14 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "set_by_user_id",
         ],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::PlanEvent,
         table: "plan_event",
         columns: &["on_day", "kind", "priority", "name"],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::CalibrationResult,
@@ -301,6 +321,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "rir_declared",
         ],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::VolumeRangeOverride,
@@ -315,6 +336,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "set_at",
         ],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::Suggestion,
@@ -330,12 +352,14 @@ pub(crate) const TABLES: &[TableSpec] = &[
             "inputs",
         ],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::SuggestionResponse,
         table: "suggestion_response",
         columns: &["suggestion_id", "response", "reason", "at"],
         members: None,
+        per_field: false,
     },
     TableSpec {
         entity: Entity::EquipmentProfile,
@@ -346,6 +370,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             parent: "profile_id",
             columns: &["equipment", "max_load_g"],
         }),
+        per_field: false,
     },
 ];
 
@@ -403,6 +428,12 @@ mod tests {
                     .map(|&name| name.to_owned()),
             );
             assert_eq!(actual, expected, "{}", spec.table);
+            assert_eq!(
+                spec.per_field,
+                actual.contains("field_hlc"),
+                "{}: per_field must match the field_hlc column",
+                spec.table
+            );
             if let Some(members) = spec.members {
                 let actual = columns(&store, members.table)?;
                 let mut expected: BTreeSet<String> = members

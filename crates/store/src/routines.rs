@@ -177,7 +177,7 @@ impl Store {
                 .ok_or(Error::OutOfRange("routine versions"))?;
             let version = insert_version(tx, routine, number, &bytes, stamp)?;
             tx.execute(
-                "UPDATE routine SET current_version_id = ?2, field_hlc = NULL,
+                "UPDATE routine SET current_version_id = ?2,
                    hlc = ?3, node = ?4, local_seq = ?5
                  WHERE id = ?1",
                 params![
@@ -232,7 +232,7 @@ impl Store {
         let id = routine.uuid();
         self.write(|tx, stamp| {
             let changed = tx.execute(
-                "UPDATE routine SET name = ?2, field_hlc = NULL, hlc = ?3, node = ?4,
+                "UPDATE routine SET name = ?2, hlc = ?3, node = ?4,
                    local_seq = ?5
                  WHERE id = ?1 AND deleted_at IS NULL",
                 params![

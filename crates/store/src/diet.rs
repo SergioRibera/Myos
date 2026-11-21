@@ -228,7 +228,7 @@ impl Store {
             let changed = tx.execute(
                 "UPDATE meal SET eaten_at = ?2, day = ?3, tz_offset_min = ?4, slot = ?5,
                    mode = ?6, quick_size = ?7, quick_protein = ?8, note = ?9, items_gen = ?13,
-                   field_hlc = NULL, hlc = ?10, node = ?11, local_seq = ?12
+                   hlc = ?10, node = ?11, local_seq = ?12
                  WHERE id = ?1 AND deleted_at IS NULL",
                 params![
                     id.as_bytes().as_slice(),
