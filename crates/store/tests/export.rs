@@ -122,3 +122,60 @@ fn wipe_deletes_every_file() {
     let left: Vec<_> = std::fs::read_dir(&dir.0).unwrap().collect();
     assert!(left.is_empty(), "{left:?}");
 }
+
+#[test]
+fn raw_key_literals_are_not_passphrases() {
+    let dir = TempDir::new();
+    assert!(matches!(
+        Store::open(
+            dir.0.join("p.db"),
+            KeySource::Passphrase("x'00112233445566'")
+        ),
+        Err(Error::OutOfRange("passphrase"))
+    ));
+}
+
+#[test]
+fn rekey_moves_between_passphrase_and_device_key() {
+    let dir = TempDir::new();
+    let path = dir.0.join("user.db");
+    let device = DatabaseKey::generate().unwrap();
+    {
+        let mut store = Store::open(&path, KeySource::Passphrase("primera frase")).unwrap();
+        log_one_set(&mut store);
+        store.rekey(&device).unwrap();
+        assert_eq!(store.sessions_in(week()).unwrap().sessions.len(), 1);
+    }
+    assert!(matches!(
+        Store::open(&path, KeySource::Passphrase("primera frase")),
+        Err(Error::WrongKey)
+    ));
+    let mut store = Store::open(&path, &device).unwrap();
+    store.rekey(KeySource::Passphrase("segunda frase")).unwrap();
+    drop(store);
+    let store = Store::open(&path, KeySource::Passphrase("segunda frase")).unwrap();
+    assert_eq!(store.sessions_in(week()).unwrap().sessions.len(), 1);
+}
+
+#[test]
+fn imported_databases_keep_incremental_vacuum() {
+    let dir = TempDir::new();
+    let key = DatabaseKey::generate().unwrap();
+    let mut store = Store::open(dir.0.join("user.db"), &key).unwrap();
+    log_one_set(&mut store);
+    let export = dir.0.join("b.myos");
+    store.export_to(&export, "frase de prueba").unwrap();
+    let restored = dir.0.join("r.db");
+    drop(Store::import(&export, "frase de prueba", &restored, &key).unwrap());
+    let mut hex = String::new();
+    for byte in key.as_bytes() {
+        std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}")).unwrap();
+    }
+    let conn = rusqlite::Connection::open(&restored).unwrap();
+    conn.execute_batch(&format!("PRAGMA key = \"x'{hex}'\";"))
+        .unwrap();
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, 2, "incremental");
+}

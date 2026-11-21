@@ -200,7 +200,16 @@ impl Store {
         migrate::run(&mut conn, migrate::USER)?;
         Self::recover_in_flight(&mut conn)?;
         Self::init_sync_state(&conn)?;
-        derived::attach(&conn, derived, key)?;
+        // Passphrase-unlocked: the cache gets its own random raw key.
+        let derived_key = match key {
+            KeySource::Raw(_) => None,
+            KeySource::Passphrase(_) => Some(Self::local_derived_key(&conn)?),
+        };
+        derived::attach(
+            &conn,
+            derived,
+            derived_key.as_ref().map_or(key, KeySource::Raw),
+        )?;
         Ok(Self { conn, path: None })
     }
 
@@ -279,5 +288,64 @@ impl Store {
     /// Connection for transactions outside [`Store::write`] (caches).
     pub(crate) const fn conn_mut(&mut self) -> &mut Connection {
         &mut self.conn
+    }
+}
+
+impl Store {
+    /// Raw key of `derived.db` for passphrase-unlocked databases, created on
+    /// first use.
+    fn local_derived_key(conn: &Connection) -> Result<DatabaseKey, Error> {
+        let stored: Option<[u8; 32]> = conn
+            .query_row(
+                "SELECT derived_key FROM local_secret WHERE k = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(mut bytes) = stored {
+            return Ok(DatabaseKey::take(&mut bytes));
+        }
+        let key = DatabaseKey::generate()?;
+        conn.execute(
+            "INSERT INTO local_secret (k, derived_key) VALUES (1, ?1)",
+            [key.as_bytes().as_slice()],
+        )?;
+        Ok(key)
+    }
+
+    /// Re-encrypt the database under `new` (change the passphrase, or move
+    /// to a credential-store key once one exists). The derived cache is
+    /// rebuilt under the matching key.
+    pub fn rekey<'k>(&mut self, new: impl Into<KeySource<'k>>) -> Result<(), Error> {
+        let new = new.into().check()?;
+        let Some(path) = self.path.clone() else {
+            return Err(Error::OutOfRange("in-memory database"));
+        };
+        self.conn.execute_batch("DETACH DATABASE derived")?;
+        match new {
+            KeySource::Raw(key) => self.conn.execute_batch(&key.rekey_pragma())?,
+            KeySource::Passphrase(passphrase) => {
+                self.conn.pragma_update(None, "rekey", passphrase)?;
+            }
+        }
+        let derived = path.with_extension("derived.db");
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = derived.as_os_str().to_owned();
+            file.push(suffix);
+            match std::fs::remove_file(PathBuf::from(file)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(Error::Io(err)),
+            }
+        }
+        let derived_key = match new {
+            KeySource::Raw(_) => None,
+            KeySource::Passphrase(_) => Some(Self::local_derived_key(&self.conn)?),
+        };
+        derived::attach(
+            &self.conn,
+            &derived,
+            derived_key.as_ref().map_or(new, KeySource::Raw),
+        )
     }
 }

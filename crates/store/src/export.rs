@@ -54,7 +54,10 @@ fn export_main(
     let mut temp = dest.as_os_str().to_owned();
     temp.push(".partial");
     let temp = PathBuf::from(temp);
-    remove_files(std::slice::from_ref(&temp))?;
+    let mut journal = temp.as_os_str().to_owned();
+    journal.push("-journal");
+    let leftovers = [temp.clone(), PathBuf::from(journal)];
+    remove_files(&leftovers)?;
     let location = temp.to_str().ok_or(Error::OutOfRange("export path"))?;
     let secret = key.attach_value();
     conn.execute(
@@ -62,9 +65,13 @@ fn export_main(
         [location, secret.as_str()],
     )?;
     let copied = (|| -> Result<(), Error> {
+        // `sqlcipher_export` copies schema and rows, not file settings.
+        // `cipher_compatibility` resets the KDF settings: it goes first.
+        conn.execute_batch("PRAGMA export.cipher_compatibility = 4;")?;
         if let Some(iter) = kdf_iter {
             conn.pragma_update(Some("export"), "kdf_iter", iter)?;
         }
+        conn.execute_batch("PRAGMA export.auto_vacuum = INCREMENTAL;")?;
         conn.query_row("SELECT sqlcipher_export('export')", [], |_| Ok(()))?;
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         conn.pragma_update(Some("export"), "user_version", version)?;
@@ -72,7 +79,7 @@ fn export_main(
     })();
     conn.execute_batch("DETACH DATABASE export")?;
     if let Err(err) = copied {
-        remove_files(std::slice::from_ref(&temp))?;
+        remove_files(&leftovers)?;
         return Err(err);
     }
     std::fs::rename(&temp, dest).map_err(Error::Io)
@@ -139,6 +146,8 @@ impl Store {
             (Uuid::now_v7().as_bytes().as_slice(), node),
         )?;
         tx.execute("UPDATE sync_outbox SET state = 0 WHERE state = 1", [])?;
+        // Rows set aside on the old device are pulled again if still current.
+        tx.execute("DELETE FROM sync_quarantine", [])?;
         tx.commit()?;
         Ok(())
     }

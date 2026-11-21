@@ -685,3 +685,16 @@ Where `crates/store` refines or departs from the sections above.
   the vendored OpenSSL behind SQLCipher cannot be cross-built from Linux;
   the Windows target needs a prebuilt or separately built static libcrypto
   (`OPENSSL_LIB_DIR` / `OPENSSL_INCLUDE_DIR` with `bundled-sqlcipher`).
+- **Exports, passphrases, logout.** `.myos` = the whole `user.db` copied by
+  `sqlcipher_export` under a passphrase (SQLCipher KDF: PBKDF2-HMAC-SHA512,
+  600 000 iterations, the file's own salt — replaces the Argon2id note in
+  §9; no extra crypto dependency). `cipher_compatibility`, `kdf_iter`,
+  `auto_vacuum` and `user_version` are set on the export explicitly.
+  Import opens it with the passphrase, copies it into a new file under the
+  device key, rotates `device_id` / `node`, clears the quarantine and keeps
+  the outbox (re-sent ops are answered by receipt). Passphrases have at
+  least 8 characters and may not look like an `x'…'` raw key. A
+  passphrase-unlocked `user.db` (no credential store) keeps a random raw key
+  for `derived.db` in `local_secret`, so opening runs the KDF once;
+  `Store::rekey` moves between passphrase and device key. Logout drops the
+  stored key first, then deletes `user.db*` and `user.derived.db*`.

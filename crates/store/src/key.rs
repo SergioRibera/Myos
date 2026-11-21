@@ -107,6 +107,14 @@ impl KeySource<'_> {
             Self::Passphrase(passphrase) if passphrase.chars().count() < MIN_PASSPHRASE_CHARS => {
                 Err(Error::OutOfRange("passphrase"))
             }
+            // SQLCipher reads `x'…'` as a raw key, not a passphrase.
+            Self::Passphrase(passphrase)
+                if passphrase
+                    .get(..2)
+                    .is_some_and(|start| start.eq_ignore_ascii_case("x'")) =>
+            {
+                Err(Error::OutOfRange("passphrase"))
+            }
             other => Ok(other),
         }
     }
@@ -126,5 +134,16 @@ impl KeySource<'_> {
             Self::Raw(key) => conn.execute_batch(&key.pragma()),
             Self::Passphrase(passphrase) => conn.pragma_update(None, "key", passphrase),
         }
+    }
+}
+
+impl DatabaseKey {
+    /// `PRAGMA rekey` statement for this key, wiped on drop.
+    pub(crate) fn rekey_pragma(&self) -> Zeroizing<String> {
+        let mut statement = Zeroizing::new(String::with_capacity(86));
+        statement.push_str("PRAGMA rekey = \"");
+        statement.push_str(&self.raw_literal());
+        statement.push_str("\";");
+        statement
     }
 }

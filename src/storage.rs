@@ -147,12 +147,14 @@ pub fn open_with_passphrase(passphrase: &str) -> Result<Opened, StorageError> {
 /// Log out: delete the database files and the stored key. Data that was not
 /// synced or exported is gone.
 pub fn logout(store: Store) -> Result<(), StorageError> {
-    store.wipe()?;
+    // Key first: if deleting the files fails, the next start finds a
+    // database without key and discards it.
     match Vault::open(APP_ID) {
         Ok(vault) => vault.forget()?,
         // Passphrase-unlocked database: no stored key to drop.
         Err(VaultError::Unavailable(_)) => {}
         Err(other) => return Err(other.into()),
     }
+    store.wipe()?;
     Ok(())
 }

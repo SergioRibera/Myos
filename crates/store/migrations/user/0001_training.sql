@@ -68,6 +68,13 @@ CREATE TABLE sync_quarantine (
 ) STRICT;
 CREATE INDEX sync_quarantine_row ON sync_quarantine (entity, row_id);
 
+-- Random raw key of derived.db when user.db is unlocked by a passphrase (so
+-- opening does not run the passphrase KDF twice). Local only.
+CREATE TABLE local_secret (
+  k           INTEGER PRIMARY KEY CHECK (k = 1),
+  derived_key BLOB NOT NULL CHECK (length(derived_key) = 32)
+) STRICT;
+
 -- Days whose derived data must be recomputed although no row on them
 -- changed now (a synced row moved away from them). Local only.
 CREATE TABLE derived_touched_day (
