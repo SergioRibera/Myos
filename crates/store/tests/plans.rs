@@ -214,9 +214,9 @@ fn phases_events_and_calibration() {
         vec![(phase_id, phase)]
     );
     let later = DaySpan::iso_week(date(2026, 11, 18));
-    assert!(store.phases_in(later).unwrap().rows.is_empty());
+    assert_eq!(store.phases_in(later).unwrap().rows, []);
     store.delete_phase(phase_id).unwrap();
-    assert!(store.phases_in(overlapping).unwrap().rows.is_empty());
+    assert_eq!(store.phases_in(overlapping).unwrap().rows, []);
 
     let event = Event {
         on: date(2026, 11, 21),

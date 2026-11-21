@@ -100,8 +100,8 @@ fn decode_hex(text: &str) -> Option<Zeroizing<[u8; 32]>> {
         _ => None,
     };
     let mut key = Zeroizing::new([0_u8; 32]);
-    for (slot, pair) in key.iter_mut().zip(bytes.chunks_exact(2)) {
-        *slot = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+    for (slot, [high, low]) in key.iter_mut().zip(bytes.as_chunks::<2>().0) {
+        *slot = (nibble(*high)? << 4) | nibble(*low)?;
     }
     Some(key)
 }

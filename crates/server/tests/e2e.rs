@@ -216,7 +216,7 @@ fn devices_sync_through_postgres() {
     tablet.delete_session(session).unwrap();
     tablet.sync_once(&mut tablet_link).unwrap();
     phone.sync_once(&mut phone_link).unwrap();
-    assert!(phone.sessions_in(week()).unwrap().sessions.is_empty());
+    assert_eq!(phone.sessions_in(week()).unwrap().sessions, []);
 
     // Row-level security: another user sees nothing of Alice's.
     let mut stranger = device(bob);

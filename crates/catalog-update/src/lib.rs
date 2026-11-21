@@ -121,7 +121,7 @@ fn unhex<const N: usize>(text: &str) -> Result<[u8; N], UpdateError> {
         return Err(UpdateError::Hex);
     }
     let mut out = [0_u8; N];
-    for (slot, pair) in out.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+    for (slot, pair) in out.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
         let pair = std::str::from_utf8(pair).map_err(|_| UpdateError::Hex)?;
         *slot = u8::from_str_radix(pair, 16).map_err(|_| UpdateError::Hex)?;
     }
@@ -539,7 +539,7 @@ mod tests {
 
 #[cfg(test)]
 mod download_tests {
-    use std::io::{BufRead, BufReader, Write as _};
+    use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
 

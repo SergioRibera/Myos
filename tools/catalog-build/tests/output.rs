@@ -26,9 +26,9 @@ fn built_files_open_in_the_app_store() {
     let bench = store
         .search_exercises("barbell bench press", "en", 5)
         .unwrap();
-    assert!(!bench.is_empty());
+    assert_ne!(bench, []);
     let exercise = catalog.exercise(bench[0].id).unwrap();
-    assert!(!exercise.targets.is_empty());
+    assert_ne!(exercise.targets, []);
 
     let banana = store.search_foods("banana raw", "en", 5).unwrap();
     let food = store.catalog_food(banana[0].id, "en").unwrap().unwrap();
@@ -63,11 +63,6 @@ fn spanish_names_are_searchable() {
         "{bench:?}"
     );
     // English still finds the row from a Spanish search (alias).
-    assert!(
-        !store
-            .search_exercises("bench press", "es", 5)
-            .unwrap()
-            .is_empty()
-    );
-    assert!(!store.search_foods("manzana", "es", 5).unwrap().is_empty());
+    assert_ne!(store.search_exercises("bench press", "es", 5).unwrap(), []);
+    assert_ne!(store.search_foods("manzana", "es", 5).unwrap(), []);
 }

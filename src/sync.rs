@@ -124,7 +124,7 @@ fn parse_key(text: &str) -> Option<Zeroizing<[u8; 32]>> {
         return None;
     }
     let mut key = Zeroizing::new([0_u8; 32]);
-    for (slot, pair) in key.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+    for (slot, pair) in key.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
         *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
     }
     Some(key)

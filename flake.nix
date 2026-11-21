@@ -71,6 +71,8 @@
           license = "MIT OR Apache-2.0";
           maintainer = "Sergio Ribera <contact@sergioribera.rs>";
           description = "Workout manager app";
+          # One line for package managers (RPM `Summary`, deb short description).
+          summary = "Offline-first workout log with weighted muscle load and diet tracking";
           homepage = "https://github.com/SergioRibera/myos";
           bundleId = manifest.id;
           downloadUrl = "https://github.com/SergioRibera/myos/releases/download/v${version}";

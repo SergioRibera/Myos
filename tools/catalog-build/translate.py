@@ -15,6 +15,7 @@ Dependencies: ctranslate2, sentencepiece.
 
 import argparse
 import re
+import shutil
 import hashlib
 import sys
 import urllib.request
@@ -37,7 +38,10 @@ def model_dir(lang: str, cache: Path) -> Path:
     archive = cache / f"en_{lang}.argosmodel"
     if not archive.exists() or hashlib.sha256(archive.read_bytes()).hexdigest() != sha256:
         print(f"downloading {url}", file=sys.stderr)
-        urllib.request.urlretrieve(url, archive)
+        # The default Python-urllib agent is refused (403) by the model host.
+        request = urllib.request.Request(url, headers={"User-Agent": "myos-catalog-build/1"})
+        with urllib.request.urlopen(request) as response, archive.open("wb") as out:
+            shutil.copyfileobj(response, out)
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         if digest != sha256:
             sys.exit(f"{url} changed upstream (SHA-256 {digest}): review it and update the pin")

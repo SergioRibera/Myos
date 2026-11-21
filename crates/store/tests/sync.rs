@@ -299,7 +299,7 @@ fn two_devices_converge() {
 
     let report = phone.sync_once(&mut link).unwrap();
     assert_eq!(report.pushed, 6);
-    assert!(phone.pending_outbox(10).unwrap().is_empty());
+    assert_eq!(phone.pending_outbox(10).unwrap(), []);
     let report = tablet.sync_once(&mut link).unwrap();
     assert_eq!(report.applied, 6);
 
@@ -358,8 +358,8 @@ fn delete_beats_a_concurrent_edit() {
     phone.sync_once(&mut link).unwrap();
     tablet.sync_once(&mut link).unwrap();
 
-    assert!(phone.sets_of(id).unwrap().sets.is_empty());
-    assert!(tablet.sets_of(id).unwrap().sets.is_empty());
+    assert_eq!(phone.sets_of(id).unwrap().sets, []);
+    assert_eq!(tablet.sets_of(id).unwrap().sets, []);
 }
 
 #[test]
@@ -611,8 +611,8 @@ fn concurrent_edits_of_different_fields_both_survive() {
         (preferences.theme, preferences.mass_unit),
         (Theme::Dark, MassUnit::Pound)
     );
-    assert!(phone.pending_outbox(10).unwrap().is_empty());
-    assert!(tablet.pending_outbox(10).unwrap().is_empty());
+    assert_eq!(phone.pending_outbox(10).unwrap(), []);
+    assert_eq!(tablet.pending_outbox(10).unwrap(), []);
 }
 
 #[test]

@@ -161,7 +161,7 @@ fn editing_a_user_exercise_recomputes_its_weeks() {
     let listed = store.custom_exercises(false).unwrap();
     assert_eq!(listed[0].exercise.targets[0].muscle, Muscle::Biceps);
     store.delete_custom_exercise(exercise).unwrap();
-    assert!(store.custom_exercises(false).unwrap().is_empty());
+    assert_eq!(store.custom_exercises(false).unwrap(), []);
     assert_eq!(store.custom_exercises(true).unwrap().len(), 1);
 }
 

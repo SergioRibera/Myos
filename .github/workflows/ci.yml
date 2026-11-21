@@ -54,6 +54,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: 'aarch64-linux-android,x86_64-linux-android' }
       - uses: Swatinem/rust-cache@v2
+      # OpenSSL (vendored, behind SQLCipher) looks for `<target>-ranlib`; NDK r23+
+      # ships only the LLVM binutils.
+      - name: NDK binutils for OpenSSL
+        run: |
+          bin="$ANDROID_SDK_ROOT/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for target in aarch64_linux_android armv7_linux_androideabi x86_64_linux_android i686_linux_android; do
+            echo "AR_$target=$bin/llvm-ar" >> "$GITHUB_ENV"
+            echo "RANLIB_$target=$bin/llvm-ranlib" >> "$GITHUB_ENV"
+          done
       # The Gradle plugin builds the Rust crate for every ABI.
       - name: assemble debug APK
         working-directory: android

@@ -152,12 +152,7 @@ fn catalog_exercises_and_foods_are_found() {
     assert_eq!(bench.targets[0].muscle, Muscle::Chest);
     // Retired exercises still resolve for history but are not searchable.
     assert!(catalog.exercise(Id::from(SQUAT)).is_some());
-    assert!(
-        store
-            .search_exercises("sentad", "es", 10)
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(store.search_exercises("sentad", "es", 10).unwrap(), []);
 
     let hits = store.search_exercises("pres banc", "es", 10).unwrap();
     assert_eq!(hits.len(), 1);

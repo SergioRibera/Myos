@@ -64,7 +64,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       # Pinned sources only (re-hashed after restore); the OFF export changes daily.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.CACHE_DIR }}
           key: catalog-sources-${{ hashFiles('tools/catalog-build/src/fetch.rs') }}
@@ -135,6 +135,8 @@ jobs:
     environment: catalog-signing
     permissions:
       contents: read
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -146,14 +148,18 @@ jobs:
         with:
           name: catalog-dist
           path: dist
+      # Without the key nothing is published (the build above still ran and
+      # tested everything): set it up to start publishing.
       - name: sign
+        id: sign
         env:
           CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}
         run: |
           set -euo pipefail
           if [ -z "$CATALOG_SIGNING_KEY" ]; then
-            echo "::error::CATALOG_SIGNING_KEY missing in the catalog-signing environment"
-            exit 1
+            echo "::warning::CATALOG_SIGNING_KEY not set in the catalog-signing environment: built and tested, not published"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           signer=$(bash .github/scripts/catalog-sig.sh sign dist)
           app=$(bash .github/scripts/catalog-sig.sh public-key)
@@ -164,7 +170,9 @@ jobs:
           fi
           [ -n "$app" ] || echo "::warning::PUBLIC_KEY unset in src/reference.rs: apps will not accept updates yet"
           bash .github/scripts/catalog-sig.sh verify dist "$signer"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+      - if: steps.sign.outputs.signed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: catalog-signature
           path: dist/manifest.sig
@@ -174,6 +182,7 @@ jobs:
   publish:
     name: publish
     needs: [build, sign]
+    if: needs.sign.outputs.signed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

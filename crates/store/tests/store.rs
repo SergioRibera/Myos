@@ -120,7 +120,7 @@ fn edits_and_deletes_respect_liveness() {
     assert_eq!(store.sets_of(session).unwrap().sets[0].record, fixed);
 
     store.delete_set(set).unwrap();
-    assert!(store.sets_of(session).unwrap().sets.is_empty());
+    assert_eq!(store.sets_of(session).unwrap().sets, []);
     assert!(matches!(
         store.update_set(set, &fixed),
         Err(Error::NotFound(_))
@@ -130,13 +130,13 @@ fn edits_and_deletes_respect_liveness() {
     store.log_set(session, &fixed).unwrap();
     store.delete_session(session).unwrap();
     let week = DaySpan::iso_week(date(2026, 11, 18));
-    assert!(store.sessions_in(week).unwrap().sessions.is_empty());
+    assert_eq!(store.sessions_in(week).unwrap().sessions, []);
     assert!(matches!(
         store.log_set(session, &fixed),
         Err(Error::NotFound(_))
     ));
     // The set itself is not tombstoned, it only stops being visible.
-    assert!(store.sets_of(session).unwrap().sets.is_empty());
+    assert_eq!(store.sets_of(session).unwrap().sets, []);
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn engine_reads_the_week_from_the_store() {
     assert!((report.volume.get(Muscle::Chest).total().get() - 2.0).abs() < 1e-9);
 
     let next_week = DaySpan::iso_week(date(2026, 11, 25));
-    assert!(store.sessions_in(next_week).unwrap().sessions.is_empty());
+    assert_eq!(store.sessions_in(next_week).unwrap().sessions, []);
 }
 
 #[test]
