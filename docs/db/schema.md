@@ -706,6 +706,34 @@ Where `crates/store` refines or departs from the sections above.
   exercise (retired too) into a `Catalog: ExerciseLookup` for
   `refresh_derived`; searches are FTS5 prefix matches per word (quoted, so
   user input never reaches FTS syntax), active rows only, bm25 order.
+- **Catalog pipeline (`tools/catalog-build`, workflow `catalog`).** Pinned
+  sources checked by SHA-256: free-exercise-db (commit f00c92c, Unlicense;
+  images never used), USDA FDC Foundation 2026-10-29 + SR Legacy (CC0;
+  Foundation wins on equal names), Open Food Facts daily export (ODbL /
+  DbCL, one `off-<cc>.db` per country, one streaming pass). Ids: UUIDv5 of
+  `https://myos.app/catalog/exercise:<slug>` / `food:fdc:<fdcId>`. Names
+  are English only for now (the store falls back to English); Spanish
+  names come from curation. Version = UTC `YYYYMMDDHH`. Output files are
+  journal-less, FTS-optimized, integrity- and FK-checked, then opened by
+  the app's store in a smoke test. `manifest` (file, version, size,
+  SHA-256) is signed with ed25519 (`CATALOG_SIGNING_KEY`); published as
+  `catalog-v<version>` and on the moving `catalog` release (files before
+  manifest). Manual trigger only (`workflow_dispatch`); weekly schedule and
+  push-on-pipeline-change triggers are written but commented out.
+- **App reference files (`src/reference.rs`).** Release builds download
+  the current `catalog.db` + `manifest` into `assets/catalog/` (bundled as
+  istmo assets); on start the bundled copy replaces the installed one when
+  newer. A background thread fetches the signed manifest and downloads
+  newer files (size + SHA-256 checked, `.part` then rename); the UI loop
+  calls `App::poll` to swap them in on its own connection. Remote updates
+  stay off until `PUBLIC_KEY` holds the signing key's public half.
+  Food facts follow `App::set_food_facts_country`.
+- **App sync (`src/sync.rs`).** The account (server, user, token, account
+  key) lives in the credential store (`sync-account`); `MYOS_SYNC_ACCOUNT`
+  (`server|user|token|key-hex`) is a development fallback. A `myos-sync`
+  thread opens its own connection (`storage::open_secondary`) and runs
+  `sync_once` every 5 min or on `App::request_sync`, backing off 30 s → 30
+  min on failure; a refused token stops it with `SignInRequired`.
 - **Sync server (`crates/server`).** axum + `tokio-postgres` / deadpool.
   Opaque store: `sync_row(user_id, entity, row_id, op, hlc, node, rev,
   payload_ver, payload)`, gap-free per-user `rev` from `user_rev` taken in

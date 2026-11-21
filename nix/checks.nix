@@ -14,6 +14,8 @@ let
     "myos-sync-wire"
     "myos-sync-http"
     "myos-server"
+    "myos-catalog-update"
+    "catalog-build"
   ];
   packageFlags = lib.concatMap (name: [
     "-p"

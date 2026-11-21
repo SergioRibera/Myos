@@ -31,6 +31,7 @@ let
         # Workspace members: cargo resolves every manifest, and the app links
         # the core, store and vault crates.
         ../crates
+        ../tools
         # `[app.icon]` in istmo.toml: build.rs reads the icons.
         ../brand/app-icon
       ]

@@ -1,0 +1,130 @@
+name: catalog
+
+# Builds the reference files (catalog.db, off-<cc>.db), smoke-tests them with
+# the app's store, signs the manifest and publishes everything twice: as
+# `catalog-v<version>` (history) and on the moving `catalog` release the app
+# downloads from. Release builds bundle the newest `catalog.db`.
+#
+# Needs the CATALOG_SIGNING_KEY secret (`cargo run -p catalog-build --
+# keygen`); its public key goes into `src/reference.rs` (`PUBLIC_KEY`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      food_facts:
+        description: "Rebuild the Open Food Facts files (downloads the ~1 GB export). Off: keep the published ones."
+        type: boolean
+        default: true
+      countries:
+        description: "Food-facts countries (ISO 3166-1 alpha-2, comma separated)"
+        type: string
+        default: "bo,ar,cl,co,ec,mx,pe,py,uy,ve,es,us"
+  # Open Food Facts changes daily; a weekly refresh keeps barcodes current.
+  # Enable once the manual runs look right:
+  # schedule:
+  #   - cron: "0 5 * * 1"
+  # Rebuild when the pipeline or the catalog schema changes on main:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "tools/catalog-build/**"
+  #     - "crates/store/migrations/catalog/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: catalog
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CACHE_DIR: ${{ github.workspace }}/.catalog-cache
+
+jobs:
+  build:
+    name: build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: signing key present
+        env:
+          CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}
+        run: |
+          if [ -z "$CATALOG_SIGNING_KEY" ]; then
+            echo "::error::CATALOG_SIGNING_KEY secret missing (cargo run -p catalog-build -- keygen)"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Pinned sources only (checked by SHA-256); the OFF export changes daily.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: catalog-sources-${{ hashFiles('tools/catalog-build/src/fetch.rs') }}
+
+      - name: version
+        id: v
+        run: echo "version=$(date -u +%Y%m%d%H)" >> "$GITHUB_OUTPUT"
+
+      - name: catalog.db
+        run: >
+          cargo run --release --locked -p catalog-build --
+          catalog --out dist --version ${{ steps.v.outputs.version }} --cache "$CACHE_DIR"
+
+      - name: food facts
+        if: inputs.food_facts
+        run: |
+          # Streamed from disk: the cache keeps it out of memory, not across runs.
+          cargo run --release --locked -p catalog-build -- \
+            food-facts --out dist --version ${{ steps.v.outputs.version }} \
+            --countries "${{ inputs.countries }}" --cache "$RUNNER_TEMP/off"
+
+      - name: keep published food facts
+        if: ${{ !inputs.food_facts }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download catalog --pattern 'off-*.db' --dir dist || echo "none published yet"
+
+      - name: smoke test with the app's store
+        run: CATALOG_DIST="$PWD/dist" cargo test --release --locked -p catalog-build
+
+      - name: sign manifest
+        env:
+          CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}
+        run: cargo run --release --locked -p catalog-build -- manifest --dir dist
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd dist
+          cat > NOTES.md <<EON
+          Reference data $VERSION.
+
+          - Exercises: free-exercise-db (Unlicense).
+          - Foods: USDA FoodData Central, Foundation Foods and SR Legacy (CC0).
+          - Barcodes: Open Food Facts (ODbL / DbCL), one file per country.
+
+          \`manifest\` lists every file with its version, size and SHA-256;
+          \`manifest.sig\` is its ed25519 signature.
+          EON
+          files=(catalog.db off-*.db manifest manifest.sig)
+          gh release create "catalog-v$VERSION" "${files[@]}" \
+            --title "Catalog $VERSION" --notes-file NOTES.md --latest=false
+          if ! gh release view catalog >/dev/null 2>&1; then
+            gh release create catalog --title "Catalog (current)" \
+              --notes "Moving release: the current reference files. History: catalog-v* releases." \
+              --latest=false
+          fi
+          # Files first, manifest last: a client never sees a manifest whose
+          # files are not there yet.
+          gh release upload catalog catalog.db off-*.db --clobber
+          gh release upload catalog manifest manifest.sig --clobber
