@@ -1,6 +1,13 @@
 {
   description = "myos: Workout manager app";
 
+  # Personal attic cache: builds already pushed by CI (or another machine)
+  # are downloaded instead of rebuilt.
+  nixConfig = {
+    extra-substituters = [ "https://cache.sergioribera.rs/main" ];
+    extra-trusted-public-keys = [ "main:vFI3N1JP9edRFwBwdk9ebUKTIPWK9R1ECbkdA7Q593M=" ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";

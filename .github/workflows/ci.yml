@@ -96,10 +96,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
-        with: { nix_path: nixpkgs=channel:nixos-unstable }
+      - id: nix
+        uses: ./.github/actions/setup-nix
+        with:
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          watch-store: "true"
       - run: nix flake check
       - run: nix build .#bundles
+      - name: Push results to attic
+        if: always()
+        uses: ./.github/actions/attic-push
+        with:
+          push-enabled: ${{ steps.nix.outputs.push-enabled }}
+          paths: result
+          closure-of: .#bundles .#checks.x86_64-linux.crates
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-bundle
@@ -114,7 +124,7 @@ jobs:
         working-directory: site
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: ./.github/actions/setup-nix
       # The committed copy is what hosts without Nix build from.
       - name: src/data/targets.json matches nix/targets.nix
         run: |
