@@ -64,7 +64,7 @@ fn secure(base: &str) -> bool {
 pub struct HttpTransport {
     agent: ureq::Agent,
     base: String,
-    token: String,
+    token: zeroize::Zeroizing<String>,
 }
 
 // Manual impl: the token must not reach logs.
@@ -91,12 +91,12 @@ impl HttpTransport {
         Ok(Self {
             agent: ureq::Agent::new_with_config(config),
             base: base.trim_end_matches('/').to_owned(),
-            token: token.to_owned(),
+            token: zeroize::Zeroizing::new(token.to_owned()),
         })
     }
 
     fn authorization(&self) -> String {
-        format!("Bearer {}", self.token)
+        format!("Bearer {}", self.token.as_str())
     }
 
     fn read(response: ureq::http::Response<ureq::Body>) -> Result<Vec<u8>, HttpError> {

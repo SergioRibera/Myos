@@ -4,7 +4,7 @@
 //! The account (server, user, token, account key) lives in the credential
 //! store next to the database key. Signing in is the identity provider's
 //! job (not chosen yet); [`Account::from_env`] reads `MYOS_SYNC_ACCOUNT`
-//! (`server|user|token|key-hex`) for development.
+//! (`server|user|token|key-hex`) in debug builds.
 
 use std::fmt::Write as _;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -79,9 +79,14 @@ impl Account {
         })
     }
 
-    /// Development account from `MYOS_SYNC_ACCOUNT`.
+    /// Development account from `MYOS_SYNC_ACCOUNT` (debug builds only: a
+    /// release build never binds the database to an account from the
+    /// environment).
     #[must_use]
     pub fn from_env() -> Option<Self> {
+        if !cfg!(debug_assertions) {
+            return None;
+        }
         let spec = Zeroizing::new(std::env::var("MYOS_SYNC_ACCOUNT").ok()?);
         let mut parts = spec.split('|');
         Some(Self {
@@ -156,6 +161,7 @@ pub enum SyncState {
 pub struct Syncer {
     nudge: Sender<()>,
     state: Arc<Mutex<SyncState>>,
+    thread: std::thread::JoinHandle<()>,
 }
 
 fn chain(error: &dyn std::error::Error) -> String {
@@ -184,7 +190,7 @@ impl Syncer {
         let state = Arc::new(Mutex::new(SyncState::Idle));
         let shared = Arc::clone(&state);
         let account = account.clone();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("myos-sync".into())
             .spawn(move || {
                 let set = |next: SyncState| {
@@ -218,7 +224,20 @@ impl Syncer {
                     }
                 }
             })?;
-        Ok(Self { nudge, state })
+        Ok(Self {
+            nudge,
+            state,
+            thread,
+        })
+    }
+
+    /// Stop the thread and wait for its current round to end (so a new
+    /// thread never re-sends what this one has in flight).
+    pub fn stop(self) {
+        drop(self.nudge);
+        if self.thread.join().is_err() {
+            log::warn!("sync thread panicked");
+        }
     }
 
     /// Sync now instead of waiting (after a local write, on app resume).

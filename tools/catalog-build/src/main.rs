@@ -101,23 +101,22 @@ fn manifest(dir: &Path) -> Result<(), BuildError> {
     names.sort();
     for name in names {
         let path = dir.join(&name);
-        let (kind, version) = if name == "catalog.db" {
-            (Kind::Catalog, catalog::read_version(&path, "catalog_meta")?)
+        let (kind, table) = if name == "catalog.db" {
+            (Kind::Catalog, "catalog_meta")
         } else if let Some(country) = name
             .strip_prefix("off-")
             .and_then(|rest| rest.strip_suffix(".db"))
             .filter(|country| myos_catalog_update::valid_country(country))
         {
-            (
-                Kind::FoodFacts(country.to_owned()),
-                catalog::read_version(&path, "meta")?,
-            )
+            (Kind::FoodFacts(country.to_owned()), "meta")
         } else {
             continue;
         };
+        let schema = catalog::read_meta(&path, table, "schema_version")?;
+        let version = catalog::read_meta(&path, table, "version")?;
         manifest
             .entries
-            .push(myos_catalog_update::describe(kind, &path, version)?);
+            .push(myos_catalog_update::describe(kind, &path, schema, version)?);
     }
     let text = manifest.render();
     std::fs::write(dir.join("manifest"), &text)?;

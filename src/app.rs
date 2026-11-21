@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
 use istmo::Runtime;
 use myos_store::Store;
@@ -14,6 +15,9 @@ use myos_store::catalog::{Catalog, ReferenceInfo};
 use crate::reference::{self, Installed, Ready};
 use crate::storage::{self, Opened, Reset, StorageError};
 use crate::sync::{Account, SyncState, Syncer};
+
+/// How often a long-running app looks for newer reference files.
+const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 3600);
 
 /// Application state shared by every shell.
 #[derive(Debug)]
@@ -24,6 +28,9 @@ pub struct App {
     catalog: Option<ReferenceInfo>,
     food_facts: Option<(String, Option<ReferenceInfo>)>,
     updates: Option<Receiver<Vec<Ready>>>,
+    /// Inputs changed while a check ran: check again when it ends.
+    recheck: bool,
+    last_check: Option<Instant>,
     syncer: Option<Syncer>,
 }
 
@@ -54,6 +61,8 @@ impl App {
                 catalog: None,
                 food_facts: None,
                 updates: None,
+                recheck: false,
+                last_check: None,
                 syncer: None,
             },
             Err(err) => {
@@ -65,6 +74,8 @@ impl App {
                     catalog: None,
                     food_facts: None,
                     updates: None,
+                    recheck: false,
+                    last_check: None,
                     syncer: None,
                 };
             }
@@ -103,6 +114,10 @@ impl App {
             .as_mut()
             .map_err(|_| StorageError::Store(myos_store::Error::NotFound("database")))?;
         store.attach_account(account.user, &account.key)?;
+        // One sync thread at a time: the old one finishes its round first.
+        if let Some(old) = self.syncer.take() {
+            old.stop();
+        }
         self.syncer = Some(
             Syncer::start(account).map_err(|source| StorageError::Directory {
                 path: "myos-sync thread".into(),
@@ -116,13 +131,21 @@ impl App {
     /// start syncing. Fails with `AccountMismatch` when the database belongs
     /// to another account (log out first).
     pub fn sign_in(&mut self, account: &Account) -> Result<(), StorageError> {
-        self.start_sync(account)?;
-        account.save()
+        account.save()?;
+        if let Err(err) = self.start_sync(account) {
+            if let Err(forget) = Account::forget() {
+                log::warn!("cannot forget the account: {}", chain(&forget));
+            }
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Stop syncing and forget the account (local data stays).
     pub fn stop_sync(&mut self) -> Result<(), StorageError> {
-        self.syncer = None;
+        if let Some(syncer) = self.syncer.take() {
+            syncer.stop();
+        }
         Account::forget()
     }
 
@@ -159,9 +182,14 @@ impl App {
 
     /// Look for newer reference files in the background.
     pub fn check_for_updates(&mut self) {
-        if self.store.is_err() || self.updates.is_some() {
+        if self.store.is_err() {
             return;
         }
+        if self.updates.is_some() {
+            self.recheck = true;
+            return;
+        }
+        self.last_check = Some(Instant::now());
         let installed = Installed {
             catalog: self.catalog.map(|info| info.version),
             food_facts: self
@@ -187,6 +215,12 @@ impl App {
     /// from the UI loop; cheap when nothing is pending.
     pub fn poll(&mut self) {
         let Some(updates) = &self.updates else {
+            if self
+                .last_check
+                .is_some_and(|at| at.elapsed() >= UPDATE_INTERVAL)
+            {
+                self.check_for_updates();
+            }
             return;
         };
         let ready = match updates.try_recv() {
@@ -195,16 +229,35 @@ impl App {
             Err(TryRecvError::Disconnected) => Vec::new(),
         };
         self.updates = None;
-        let Ok(store) = &mut self.store else {
-            return;
-        };
+        if let Ok(store) = &mut self.store {
+            Self::apply_ready(store, ready, &mut self.catalog, &mut self.food_facts);
+        }
+        if std::mem::take(&mut self.recheck) {
+            self.check_for_updates();
+        }
+    }
+
+    fn apply_ready(
+        store: &mut Store,
+        ready: Vec<Ready>,
+        catalog: &mut Option<ReferenceInfo>,
+        food_facts: &mut Option<(String, Option<ReferenceInfo>)>,
+    ) {
         for file in ready {
+            // The country changed while it downloaded: drop it.
+            if file.country.is_some()
+                && file.country.as_deref()
+                    != food_facts.as_ref().map(|(country, _)| country.as_str())
+            {
+                let _removed = std::fs::remove_file(&file.next);
+                continue;
+            }
             let reference = file.reference;
             match file.apply(store) {
                 Ok(info) => match reference {
-                    myos_store::catalog::Reference::Catalog => self.catalog = Some(info),
+                    myos_store::catalog::Reference::Catalog => *catalog = Some(info),
                     myos_store::catalog::Reference::FoodFacts => {
-                        if let Some((_, slot)) = &mut self.food_facts {
+                        if let Some((_, slot)) = food_facts {
                             *slot = Some(info);
                         }
                     }

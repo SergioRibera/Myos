@@ -28,19 +28,20 @@ pub(crate) fn catalog_id(key: &str) -> Uuid {
     )
 }
 
-/// `version` from a reference file's meta table.
-pub(crate) fn read_version(path: &Path, table: &str) -> Result<u32, BuildError> {
+/// Numeric `key` (`version`, `schema_version`) of a reference file's meta
+/// table.
+pub(crate) fn read_meta(path: &Path, table: &str, key: &str) -> Result<u32, BuildError> {
     let conn = Connection::open(path)?;
     let value: Option<String> = conn
         .query_row(
-            &format!("SELECT value FROM {table} WHERE key = 'version'"),
-            [],
+            &format!("SELECT value FROM {table} WHERE key = ?1"),
+            [key],
             |row| row.get(0),
         )
         .optional()?;
     value
         .and_then(|value| value.parse().ok())
-        .ok_or_else(|| BuildError::Invalid(format!("{} has no version", path.display())))
+        .ok_or_else(|| BuildError::Invalid(format!("{} has no {key}", path.display())))
 }
 
 /// Create an empty reference file with `schema`, replacing `path`.

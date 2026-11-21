@@ -2921,6 +2921,7 @@ dependencies = [
  "myos-sync-wire",
  "thiserror 2.0.21",
  "ureq",
+ "zeroize",
 ]
 
 [[package]]

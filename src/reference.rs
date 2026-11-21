@@ -13,13 +13,33 @@ use std::path::{Path, PathBuf};
 
 use myos_catalog_update::{Entry, Manifest, Source};
 use myos_store::Store;
-use myos_store::catalog::{Reference, ReferenceInfo};
+use myos_store::catalog::{Reference, ReferenceInfo, SCHEMA_VERSION};
 
 /// Where the catalog pipeline publishes.
 const PUBLISH_URL: &str = "https://github.com/SergioRibera/myos/releases/download/catalog";
 /// Public key of the catalog signing key (`catalog-build keygen`). Empty:
 /// remote updates are off and only the bundled catalog is used.
 const PUBLIC_KEY: &str = "";
+
+/// Sources and licenses of the reference data, for the app's about /
+/// attributions screen (the Open Food Facts license requires it).
+pub const ATTRIBUTIONS: &[(&str, &str, &str)] = &[
+    (
+        "free-exercise-db",
+        "Unlicense",
+        "https://github.com/yuhonas/free-exercise-db",
+    ),
+    (
+        "USDA FoodData Central",
+        "CC0 1.0",
+        "U.S. Department of Agriculture, Agricultural Research Service. https://fdc.nal.usda.gov",
+    ),
+    (
+        "Open Food Facts",
+        "ODbL 1.0 (database), DbCL 1.0 (contents)",
+        "Open Food Facts contributors. https://world.openfoodfacts.org",
+    ),
+];
 
 /// Directory holding the reference files.
 #[must_use]
@@ -93,15 +113,17 @@ pub fn install_catalog(store: &mut Store) -> Result<Option<ReferenceInfo>, Refer
     } else {
         None
     };
-    let bundled = bundled_manifest().and_then(|manifest| manifest.catalog().cloned());
+    let bundled = bundled_manifest()
+        .and_then(|manifest| manifest.catalog().cloned())
+        .filter(readable);
     match bundled {
         Some(entry) if installed.is_none_or(|info| entry.version > info.version) => {
             let next = dir.join("catalog.next.db");
-            let mut asset = istmo::assets::open(format!("catalog/{}", entry.file))
+            let asset = istmo::assets::open(format!("catalog/{}", entry.file))
                 .map_err(io(Path::new("catalog.db (asset)")))?;
-            let mut out = std::fs::File::create(&next).map_err(io(&next))?;
-            std::io::copy(&mut asset, &mut out).map_err(io(&next))?;
-            out.sync_all().map_err(io(&next))?;
+            // The bundled file must match the bundled manifest (CI verified
+            // the manifest signature before bundling).
+            myos_catalog_update::install(asset, &entry, &next)?;
             Ok(Some(store.replace_reference(
                 Reference::Catalog,
                 &next,
@@ -133,6 +155,8 @@ pub struct Ready {
     pub next: PathBuf,
     /// Where it goes.
     pub current: PathBuf,
+    /// Country of a food-facts file.
+    pub country: Option<String>,
 }
 
 impl Ready {
@@ -151,8 +175,13 @@ pub struct Installed {
     pub food_facts: Option<(String, Option<u32>)>,
 }
 
+/// Whether this build reads the entry's schema.
+const fn readable(entry: &Entry) -> bool {
+    entry.schema == SCHEMA_VERSION
+}
+
 fn newer(entry: Option<&Entry>, installed: Option<u32>) -> Option<&Entry> {
-    entry.filter(|entry| installed.is_none_or(|version| entry.version > version))
+    entry.filter(|entry| readable(entry) && installed.is_none_or(|version| entry.version > version))
 }
 
 /// Check the published manifest once and download what is newer than
@@ -173,7 +202,12 @@ pub fn check_for_updates(installed: &Installed) -> Option<Vec<Ready>> {
     let dir = reference_dir();
     let mut wanted = Vec::new();
     if let Some(entry) = newer(manifest.catalog(), installed.catalog) {
-        wanted.push((Reference::Catalog, entry.clone(), dir.join("catalog.db")));
+        wanted.push((
+            Reference::Catalog,
+            entry.clone(),
+            dir.join("catalog.db"),
+            None,
+        ));
     }
     if let Some((country, version)) = &installed.food_facts
         && let Some(entry) = newer(manifest.food_facts(country), *version)
@@ -182,16 +216,18 @@ pub fn check_for_updates(installed: &Installed) -> Option<Vec<Ready>> {
             Reference::FoodFacts,
             entry.clone(),
             dir.join(food_facts_file(country)),
+            Some(country.clone()),
         ));
     }
     let mut ready = Vec::new();
-    for (reference, entry, current) in wanted {
+    for (reference, entry, current, country) in wanted {
         let next = current.with_extension("next.db");
         match source.download(&entry, &next) {
             Ok(()) => ready.push(Ready {
                 reference,
                 next,
                 current,
+                country,
             }),
             Err(err) => log::warn!("download of {} failed: {err}", entry.file),
         }

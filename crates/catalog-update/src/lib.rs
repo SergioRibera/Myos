@@ -10,8 +10,14 @@
 //!
 //! ```text
 //! myos-catalog-manifest 1
-//! catalog catalog.db <version> <size> <sha256>
-//! food-facts <country> off-<country>.db <version> <size> <sha256>
+//! catalog catalog.db <schema> <version> <size> <sha256>
+//! food-facts <country> off-<country>.db <schema> <version> <size> <sha256>
+//! ```
+//!
+//! `schema` is the file's `schema_version`: clients skip entries whose
+//! schema they cannot read.
+//!
+//! ```text
 //! ```
 
 use std::fmt::Write as _;
@@ -83,6 +89,8 @@ pub struct Entry {
     pub kind: Kind,
     /// File name next to the manifest.
     pub file: String,
+    /// Schema of the file (its meta `schema_version`).
+    pub schema: u32,
     /// Data version (higher is newer).
     pub version: u32,
     /// Size in bytes.
@@ -157,7 +165,7 @@ impl Manifest {
                 }
                 _ => return Err(bad()),
             };
-            let [file, version, size, sha256] = rest else {
+            let [file, schema, version, size, sha256] = rest else {
                 return Err(bad());
             };
             if !valid_file(file) {
@@ -166,6 +174,7 @@ impl Manifest {
             entries.push(Entry {
                 kind,
                 file: (*file).to_owned(),
+                schema: schema.parse().map_err(|_| bad())?,
                 version: version.parse().map_err(|_| bad())?,
                 size: size.parse().map_err(|_| bad())?,
                 sha256: unhex(sha256).map_err(|_| bad())?,
@@ -193,8 +202,9 @@ impl Manifest {
             };
             let _infallible = writeln!(
                 text,
-                "{kind} {} {} {} {}",
+                "{kind} {} {} {} {} {}",
                 entry.file,
+                entry.schema,
                 entry.version,
                 entry.size,
                 hex(&entry.sha256)
@@ -221,7 +231,7 @@ impl Manifest {
 }
 
 /// Entry describing the file at `path`.
-pub fn describe(kind: Kind, path: &Path, version: u32) -> Result<Entry, UpdateError> {
+pub fn describe(kind: Kind, path: &Path, schema: u32, version: u32) -> Result<Entry, UpdateError> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let size = std::io::copy(&mut file, &mut hasher)?;
@@ -233,6 +243,7 @@ pub fn describe(kind: Kind, path: &Path, version: u32) -> Result<Entry, UpdateEr
             .filter(|name| valid_file(name))
             .ok_or(UpdateError::Hex)?
             .to_owned(),
+        schema,
         version,
         size,
         sha256: hasher.finalize().into(),
@@ -269,8 +280,12 @@ impl Source {
     /// Files under `base` (an `https://` directory URL), signed by `key`.
     #[must_use]
     pub fn new(base: &str, key: VerifyingKey) -> Self {
+        // Per-read timeout instead of a global one: a large file on a slow
+        // link may take long as long as bytes keep coming.
         let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(600)))
+            .https_only(true)
+            .timeout_connect(Some(Duration::from_secs(30)))
+            .timeout_per_read(Some(Duration::from_secs(60)))
             .http_status_as_error(false)
             .build();
         Self {
@@ -307,42 +322,49 @@ impl Source {
     /// Download `entry` to `dest` (replaced atomically once size and hash
     /// match; a partial or forged download never lands there).
     pub fn download(&self, entry: &Entry, dest: &Path) -> Result<(), UpdateError> {
-        let partial = dest.with_extension("part");
-        let result = (|| {
-            let mut body = self
-                .get(&entry.file)?
-                .into_with_config()
-                .limit(entry.size.min(FILE_LIMIT))
-                .reader();
-            let mut out = std::fs::File::create(&partial)?;
-            let mut hasher = Sha256::new();
-            let mut buffer = vec![0_u8; 64 * 1024];
-            let mut size = 0_u64;
-            loop {
-                let read = body.read(&mut buffer)?;
-                if read == 0 {
-                    break;
-                }
-                let chunk = buffer.get(..read).unwrap_or_default();
-                hasher.update(chunk);
-                out.write_all(chunk)?;
-                size += read as u64;
-            }
-            out.sync_all()?;
-            let digest: [u8; 32] = hasher.finalize().into();
-            if size != entry.size || digest != entry.sha256 {
-                return Err(UpdateError::Mismatch {
-                    file: entry.file.clone(),
-                });
-            }
-            std::fs::rename(&partial, dest)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _removed = std::fs::remove_file(&partial);
-        }
-        result
+        let body = self
+            .get(&entry.file)?
+            .into_with_config()
+            .limit(entry.size.min(FILE_LIMIT))
+            .reader();
+        install(body, entry, dest)
     }
+}
+
+/// Copy `source` to `dest` when its size and SHA-256 match `entry`
+/// (written to a `.part` file first; a mismatch never lands at `dest`).
+pub fn install(mut source: impl Read, entry: &Entry, dest: &Path) -> Result<(), UpdateError> {
+    let partial = dest.with_extension("part");
+    let result = (|| {
+        let mut body = source.by_ref().take(entry.size.saturating_add(1));
+        let mut out = std::fs::File::create(&partial)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; 64 * 1024];
+        let mut size = 0_u64;
+        loop {
+            let read = body.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            let chunk = buffer.get(..read).unwrap_or_default();
+            hasher.update(chunk);
+            out.write_all(chunk)?;
+            size += read as u64;
+        }
+        out.sync_all()?;
+        let digest: [u8; 32] = hasher.finalize().into();
+        if size != entry.size || digest != entry.sha256 {
+            return Err(UpdateError::Mismatch {
+                file: entry.file.clone(),
+            });
+        }
+        std::fs::rename(&partial, dest)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _removed = std::fs::remove_file(&partial);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -357,6 +379,7 @@ mod tests {
                 Entry {
                     kind: Kind::Catalog,
                     file: "catalog.db".into(),
+                    schema: 1,
                     version: 2_026_112_114,
                     size: 10,
                     sha256: [7; 32],
@@ -364,6 +387,7 @@ mod tests {
                 Entry {
                     kind: Kind::FoodFacts("bo".into()),
                     file: "off-bo.db".into(),
+                    schema: 1,
                     version: 3,
                     size: 20,
                     sha256: [9; 32],
@@ -380,7 +404,7 @@ mod tests {
         let key = verifying_key(&public_key(SEED)?)?;
         let verified = Manifest::verify(&text, &signature, &key)?;
         assert_eq!(verified.food_facts("bo").map(|entry| entry.size), Some(20));
-        let forged = text.replace("off-bo.db 3", "off-bo.db 4");
+        let forged = text.replace("off-bo.db 1 3", "off-bo.db 1 4");
         assert!(matches!(
             Manifest::verify(&forged, &signature, &key),
             Err(UpdateError::Signature)
@@ -389,13 +413,37 @@ mod tests {
     }
 
     #[test]
+    fn installs_only_matching_files() -> Result<(), UpdateError> {
+        let dir = std::env::temp_dir().join(format!("myos-install-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let data = b"reference data";
+        let entry = Entry {
+            kind: Kind::Catalog,
+            file: "catalog.db".into(),
+            schema: 1,
+            version: 1,
+            size: data.len() as u64,
+            sha256: Sha256::digest(data).into(),
+        };
+        let dest = dir.join("catalog.db");
+        install(&data[..], &entry, &dest)?;
+        assert_eq!(std::fs::read(&dest)?, data);
+        let tampered = dir.join("tampered.db");
+        assert!(install(&b"reference datA"[..], &entry, &tampered).is_err());
+        assert!(install(&b"reference data and more"[..], &entry, &tampered).is_err());
+        assert!(!tampered.exists() && !tampered.with_extension("part").exists());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn hostile_manifests_are_refused() {
         for text in [
             "",
             "myos-catalog-manifest 2\n",
-            "myos-catalog-manifest 1\ncatalog ../etc/passwd 1 1 00\n",
-            "myos-catalog-manifest 1\nfood-facts BO off.db 1 1 00\n",
-            "myos-catalog-manifest 1\ncatalog catalog.db x 1 00\n",
+            "myos-catalog-manifest 1\ncatalog ../etc/passwd 1 1 1 00\n",
+            "myos-catalog-manifest 1\nfood-facts BO off.db 1 1 1 00\n",
+            "myos-catalog-manifest 1\ncatalog catalog.db 1 x 1 00\n",
         ] {
             assert!(Manifest::parse(text).is_err(), "{text:?}");
         }
