@@ -172,6 +172,8 @@
             libXi
             nodejs
             pnpm
+            # Sync server tests start a throwaway cluster (initdb / pg_ctl).
+            postgresql
             # myos-store builds a vendored OpenSSL for SQLCipher.
             perl
             claude-code

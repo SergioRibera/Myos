@@ -1,0 +1,47 @@
+[package]
+name = "myos-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Myos sync server (PostgreSQL)"
+publish = false
+
+[features]
+# Static bearer tokens from MYOS_DEV_TOKENS: development and tests only.
+dev-auth = []
+
+[dependencies]
+axum = "0.8"
+deadpool-postgres = "0.14"
+myos-sync-wire = { path = "../sync-wire" }
+thiserror = "2.0"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = "1.29"
+
+[lints.rust]
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+unwrap_used = "deny"
+allow_attributes_without_reason = "deny"
+redundant_pub_crate = "allow"
+
+[dev-dependencies]
+jiff = { version = "1.0", default-features = false, features = ["std"] }
+myos-core = { path = "../core" }
+myos-store = { path = "../store" }
+myos-sync-http = { path = "../sync-http" }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"] }
+tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
+uuid = { version = "1.29", features = ["v7"] }
