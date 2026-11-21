@@ -45,3 +45,29 @@ fn built_files_open_in_the_app_store() {
         }
     }
 }
+
+#[test]
+fn spanish_names_are_searchable() {
+    let Some(dist) = std::env::var_os("CATALOG_DIST").map(PathBuf::from) else {
+        return;
+    };
+    let mut store = Store::open_in_memory(&DatabaseKey::generate().unwrap()).unwrap();
+    store
+        .attach_reference(Reference::Catalog, &dist.join("catalog.db"))
+        .unwrap();
+    let bench = store.search_exercises("press de banca", "es", 5).unwrap();
+    assert!(
+        bench
+            .iter()
+            .any(|hit| hit.name.starts_with("Press de banca")),
+        "{bench:?}"
+    );
+    // English still finds the row from a Spanish search (alias).
+    assert!(
+        !store
+            .search_exercises("bench press", "es", 5)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!store.search_foods("manzana", "es", 5).unwrap().is_empty());
+}

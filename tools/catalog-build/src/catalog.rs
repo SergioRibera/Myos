@@ -102,7 +102,12 @@ pub(crate) fn now_iso() -> String {
 }
 
 /// Build `catalog.db` at `path`.
-pub(crate) fn build(path: &Path, version: u32, cache: &Path) -> Result<(), BuildError> {
+pub(crate) fn build(
+    path: &Path,
+    version: u32,
+    cache: &Path,
+    translations: &Path,
+) -> Result<(), BuildError> {
     let exercises: Vec<FreeExercise> = serde_json::from_reader(std::fs::File::open(
         fetch::cached(cache, &FREE_EXERCISE_DB)?,
     )?)?;
@@ -138,9 +143,12 @@ pub(crate) fn build(path: &Path, version: u32, cache: &Path) -> Result<(), Build
             food_count += 1;
         }
     }
+    let translated = crate::translations::apply(&tx, translations)?;
     tx.commit()?;
     finish(&conn, &["exercise_search", "food_search"])?;
-    eprintln!("catalog.db v{version}: {exercise_count} exercises, {food_count} foods");
+    eprintln!(
+        "catalog.db v{version}: {exercise_count} exercises, {food_count} foods, {translated} translated names"
+    );
     Ok(())
 }
 

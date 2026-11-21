@@ -1,0 +1,324 @@
+# Food description segments (USDA descriptions are comma-separated
+# segments from a closed vocabulary). Exact, case-insensitive match per
+# segment; segments in capitals (brands) stay as written; the rest goes to
+# the machine-translation model. Participles use the masculine form (list
+# style, as in food composition tables).
+# english	spanish
+cooked	cocido
+raw	crudo
+beef	carne de res
+separable lean and fat	magro y grasa separables
+separable lean only	solo magro separable
+separable fat	solo grasa separable
+boneless	sin hueso
+bone-in	con hueso
+canned	enlatado
+trimmed to 0" fat	recortado a 0" de grasa
+trimmed to 1/8" fat	recortado a 1/8" de grasa
+trimmed to 1/4" fat	recortado a 1/4" de grasa
+pork	cerdo
+roasted	asado
+boiled	hervido
+choice	calidad choice
+select	calidad select
+prime	calidad prime
+all grades	todas las calidades
+frozen	congelado
+fresh	fresco
+lamb	cordero
+imported	importado
+drained	escurrido
+drained solids	sólidos escurridos
+beverages	bebidas
+braised	estofado
+without salt	sin sal
+with salt	con sal
+with salt added	con sal añadida
+without salt added	sin sal añadida
+no salt added	sin sal añadida
+salt added in processing	con sal añadida en el procesado
+loin	lomo
+short loin	lomo corto
+tenderloin	solomillo
+fish	pescado
+babyfood	alimento infantil
+chicken	pollo
+new zealand	Nueva Zelanda
+australian	Australia
+broiled	gratinado
+soup	sopa
+round	nalga
+bottom round	nalga de abajo
+top round	nalga de adentro
+eye of round	peceto
+tip round	bola de lomo
+grilled	a la parrilla
+white	blanco
+dry	seco
+dried	desecado
+meat only	solo carne
+meat and skin	carne y piel
+meat	carne
+mature seeds	semillas maduras
+immature seeds	semillas inmaduras
+snacks	aperitivos
+turkey	pavo
+candies	golosinas
+cheese	queso
+beans	frijoles
+dry mix	mezcla seca
+chuck	aguja
+cured	curado
+veal	ternera
+solids and liquids	sólidos y líquidos
+steak	bistec
+cereals ready-to-eat	cereales listos para comer
+cereals	cereales
+cereal	cereal
+ground	molido
+shoulder	paleta
+variety meats and by-products	vísceras y subproductos
+whole	entero
+infant formula	fórmula infantil
+rib	costilla
+plain	natural
+nuts	frutos secos
+fast foods	comida rápida
+fast food	comida rápida
+powder	en polvo
+potatoes	papas
+regular	normal
+unprepared	sin preparar
+bread	pan
+cookies	galletas
+enriched	enriquecido
+unenriched	sin enriquecer
+strained	colado
+oil	aceite
+dry heat	calor seco
+moist heat	calor húmedo
+sweet	dulce
+red	rojo
+leg	pierna
+green	verde
+chocolate	chocolate
+yellow	amarillo
+baked	horneado
+alcoholic beverage	bebida alcohólica
+unsweetened	sin azúcar
+sweetened	endulzado
+with added solution	con solución añadida
+corn	maíz
+mixed species	especies mixtas
+game meat	carne de caza
+restaurant	restaurante
+junior	junior
+instant	instantáneo
+sauce	salsa
+salad dressing	aderezo para ensaladas
+yogurt	yogur
+fruit	fruta
+commercially prepared	preparado comercialmente
+commercial	comercial
+breast	pechuga
+roast	asado
+ready-to-serve	listo para servir
+ready-to-eat	listo para comer
+ready-to-drink	listo para beber
+ready-to-feed	listo para tomar
+flour	harina
+wheat flour	harina de trigo
+squash	zapallo
+seeds	semillas
+crackers	galletas saladas
+rice	arroz
+brown rice	arroz integral
+puddings	postres
+milk	leche
+composite of trimmed retail cuts	promedio de cortes comerciales recortados
+unheated	sin calentar
+heated	calentado
+lip-on	con tapa
+lip off	sin tapa
+fried	frito
+pan-fried	frito en sartén
+condensed	condensado
+salmon	salmón
+dinner	cena
+reduced fat	reducido en grasa
+low fat	bajo en grasa
+lowfat	bajo en grasa
+fat-free	sin grasa
+fat free	sin grasa
+nonfat	sin grasa
+ham	jamón
+cake	torta
+stewed	guisado
+prepared with water	preparado con agua
+cooked with water	cocido con agua
+egg	huevo
+prepared from recipe	preparado según receta
+prepared-from-recipe	preparado según receta
+spices	especias
+tea	té
+peppers	pimientos
+prepared with equal volume water	preparado con igual volumen de agua
+drumstick	muslo
+thigh	contramuslo
+wing	ala
+vanilla	vainilla
+prepared with whole milk	preparado con leche entera
+prepared with 2% milk	preparado con leche semidescremada
+light	light
+wine	vino
+low sodium	bajo en sodio
+reduced sodium	reducido en sodio
+dark meat	carne oscura
+light meat	carne blanca
+sausage	salchicha
+brisket	pecho
+fluid	líquido
+with iron	con hierro
+table	de mesa
+prepared	preparado
+home-prepared	casero
+mollusks	moluscos
+crustaceans	crustáceos
+smoked	ahumado
+sprouted	germinado
+wheat	trigo
+peas	arvejas
+pie	pastel
+pasta	pasta
+oatmeal	avena
+frozen concentrate	concentrado congelado
+bottled	embotellado
+canned or bottled	enlatado o embotellado
+wild	silvestre
+wild caught	de captura silvestre
+farmed	de criadero
+toasted	tostado
+ice creams	helados
+peanut butter	mantequilla de maní
+liver	hígado
+kidney	riñón
+heart	corazón
+chinese	china
+simmered	cocido a fuego lento
+mushrooms	champiñones
+mushroom	champiñón
+gluten-free	sin gluten
+vegetables	verduras
+not reconstituted	sin reconstituir
+lemon	limón
+whole grain	integral
+whole-wheat	de trigo integral
+water	agua
+slice	rebanada
+sliced	en rebanadas
+chopped	picado
+mashed	en puré
+shank	garrón
+arm	brazuelo
+flank	vacío
+rolls	panecillos
+dessert	postre
+coffee	café
+brewed	preparado
+decaffeinated	descafeinado
+black	negro
+all classes	todas las clases
+all types	todos los tipos
+uncooked	crudo
+pizza	pizza
+pears	peras
+apples	manzanas
+apple	manzana
+juice	jugo
+gravy	salsa de carne
+dry roasted	tostado en seco
+oil roasted	tostado en aceite
+with skin	con piel
+without skin	sin piel
+soft	blando
+hard	duro
+salted	salado
+unsalted	sin sal
+refrigerated	refrigerado
+refrigerated dough	masa refrigerada
+potato chips	papas fritas de bolsa
+onions	cebollas
+microwaved	al microondas
+lima beans	porotos de manteca
+grass-fed	alimentado con pasto
+carbonated	gaseoso
+back	lomo
+spinach	espinaca
+peaches	duraznos
+no sugar added	sin azúcar añadida
+fat	grasa
+tomatoes	tomates
+tofu	tofu
+syrups	jarabes
+peanuts	maní
+cream	crema
+cherries	cerezas
+carrots	zanahorias
+apricots	damascos
+organic	orgánico
+duck	pato
+oats	avena
+popcorn	palomitas de maíz
+pancakes	panqueques
+noodles	fideos
+margarine	margarina
+cornmeal	harina de maíz
+brown	marrón
+broccoli	brócoli
+bacon	tocino
+american	americano
+italian	italiano
+mexican	mexicano
+latino	latino
+original	original
+soybeans	soja
+pineapple	ananá
+breaded	empanizado
+skin and breading removed	sin piel ni empanizado
+meat and skin with breading	carne y piel empanizadas
+pasteurized process	procesado pasteurizado
+mild	suave
+sour	ácido
+ripe	maduro
+crab	cangrejo
+tuna	atún
+bison	bisonte
+lettuce	lechuga
+mayonnaise	mayonesa
+strawberry	frutilla
+blueberry	arándano
+mixed	mixto
+steamed	al vapor
+fortified	fortificado
+with added calcium	con calcio añadido
+with added ascorbic acid	con ácido ascórbico añadido
+water pack	envasado en agua
+juice pack	envasado en jugo
+heavy syrup pack	envasado en almíbar espeso
+heavy syrup	almíbar espeso
+liquid concentrate	concentrado líquido
+long-grain	de grano largo
+energy drink	bebida energética
+orange juice	jugo de naranja
+sweet potato	batata
+school lunch	almuerzo escolar
+creamy	cremoso
+flesh	pulpa
+broilers or fryers	pollos de engorde
+rotisserie	rostizado
+patty	hamburguesa
+frankfurter	salchicha tipo viena
+bologna	mortadela
+pinto	pinto
+shelf stable	larga duración
+whole milk	leche entera

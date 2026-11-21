@@ -27,3 +27,4 @@ assets/catalog/*
 !assets/catalog/README.md
 # Asset staging written by the build
 android/app/src/main/assets/
+__pycache__/

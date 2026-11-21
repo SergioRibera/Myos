@@ -727,6 +727,29 @@ Where `crates/store` refines or departs from the sections above.
   (`.github/scripts/catalog-sig.sh`, same bytes as the Rust verifier, pinned
   by a test). Actions in this workflow are pinned by SHA. Manual trigger only (`workflow_dispatch`); weekly schedule and
   push-on-pipeline-change triggers are written but commented out.
+- **Catalog translations (`tools/catalog-build/translations/`).**
+  `<lang>.tsv` rows `id, English source, translation, origin`; the build
+  inserts them as names of that language with the English name as alias
+  (English searches still match), only while the English source is
+  unchanged. Origins: `glossary` = exercises composed from the curated
+  `glossary-<lang>.tsv` (move + target + adjectives inflected for the
+  move's gender/number + equipment; a name with an uncovered word stays
+  English: general MT mangled gym jargon, e.g. "Dumbbell Lunges" →
+  "Tonta los pulmones"), recomputed every run; `machine` = foods, offline
+  Argos Translate en→es (OPUS data, CTranslate2, pinned by SHA-256, no
+  network API), kept while the source is unchanged; `human` = never
+  overwritten. `translate.py` writes them; workflow `catalog translations`
+  (dispatch, monthly, push on pipeline/glossary changes) opens a PR, and
+  merging it rebuilds the catalog.
+- **Resumable downloads.** `Source::download` keeps received bytes in
+  `<dest>.download` with `<dest>.download-sha256` naming the entry; the
+  next call sends `Range` (a `206` with the matching `Content-Range`
+  appends, a `200` restarts), per-read 60 s timeout instead of a global
+  one, whole-file size + SHA-256 before acceptance (mismatch starts over).
+  The app retries 15 min after an interrupted download, 24 h otherwise.
+- **Catalog triggers.** `catalog` runs on dispatch, weekly (Mon 05:00
+  UTC, OFF refresh) and on pushes to main touching the pipeline,
+  translations or catalog schema.
 - **App reference files (`src/reference.rs`).** Release builds download
   the current `catalog.db` + `manifest` into `assets/catalog/` (bundled as
   istmo assets); on start the bundled copy replaces the installed one when

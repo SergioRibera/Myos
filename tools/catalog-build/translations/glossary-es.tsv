@@ -1,0 +1,357 @@
+# Exercise vocabulary for the compositional translation in translate.py.
+# role: move (the exercise; gender m/f, plural mp/fp), of (target, right
+# after the move), mod (adjective: masculine singular form, inflected for the
+# move's gender and number; phrases with spaces are invariant), gear
+# (equipment, last), skip (dropped). Longest phrase wins. A name with any word
+# not covered here stays in English.
+# role	english	spanish	gender
+skip	with
+skip	the
+skip	a
+skip	an
+skip	on
+skip	to
+skip	and
+skip	exercise
+skip	version
+skip	style
+skip	technique
+move	bench press	press de banca	m
+move	bench presses	press de banca	m
+move	press	press	m
+move	presses	press	m
+move	military press	press militar	m
+move	shoulder press	press de hombros	m
+move	chest press	press de pecho	m
+move	floor press	press en el suelo	m
+move	arnold press	press Arnold	m
+move	push press	push press	m
+move	leg press	prensa de piernas	f
+move	jm press	press JM	m
+move	curl	curl	m
+move	curls	curl	m
+move	hammer curl	curl martillo	m
+move	hammer curls	curl martillo	m
+move	preacher curl	curl predicador	m
+move	concentration curl	curl concentrado	m
+move	concentration curls	curl concentrado	m
+move	spider curl	curl araña	m
+move	zottman curl	curl Zottman	m
+move	drag curl	curl arrastre	m
+move	leg curl	curl femoral	m
+move	leg curls	curl femoral	m
+move	wrist curl	curl de muñeca	m
+move	wrist curls	curl de muñeca	m
+move	squat	sentadilla	f
+move	squats	sentadillas	fp
+move	front squat	sentadilla frontal	f
+move	front squats	sentadillas frontales	fp
+move	overhead squat	sentadilla por encima de la cabeza	f
+move	split squat	sentadilla dividida	f
+move	split squats	sentadillas divididas	fp
+move	goblet squat	sentadilla goblet	f
+move	hack squat	sentadilla hack	f
+move	sissy squat	sentadilla sissy	f
+move	pistol squat	sentadilla pistol	f
+move	box squat	sentadilla al cajón	f
+move	zercher squat	sentadilla Zercher	f
+move	zercher squats	sentadillas Zercher	fp
+move	jump squat	sentadilla con salto	f
+move	deadlift	peso muerto	m
+move	deadlifts	peso muerto	m
+move	sumo deadlift	peso muerto sumo	m
+move	romanian deadlift	peso muerto rumano	m
+move	stiff legged deadlift	peso muerto con piernas rígidas	m
+move	stiff leg deadlift	peso muerto con piernas rígidas	m
+move	row	remo	m
+move	rows	remo	m
+move	upright row	remo al mentón	m
+move	bent over row	remo inclinado	m
+move	t bar row	remo en T	m
+move	renegade row	remo renegado	m
+move	inverted row	remo invertido	m
+move	raise	elevación	f
+move	raises	elevaciones	fp
+move	lateral raise	elevación lateral	f
+move	lateral raises	elevaciones laterales	fp
+move	front raise	elevación frontal	f
+move	front raises	elevaciones frontales	fp
+move	calf raise	elevación de talones	f
+move	calf raises	elevaciones de talones	fp
+move	leg raise	elevación de piernas	f
+move	leg raises	elevaciones de piernas	fp
+move	push up	flexión	f
+move	push ups	flexiones	fp
+move	pushup	flexión	f
+move	pushups	flexiones	fp
+move	pull up	dominada	f
+move	pull ups	dominadas	fp
+move	pullup	dominada	f
+move	pullups	dominadas	fp
+move	chin up	dominada supina	f
+move	chin ups	dominadas supinas	fp
+move	chin	dominada supina	f
+move	chins	dominadas supinas	fp
+move	muscle up	muscle-up	m
+move	crunch	crunch	m
+move	crunches	crunches	mp
+move	sit up	abdominal	m
+move	sit ups	abdominales	mp
+move	lunge	zancada	f
+move	lunges	zancadas	fp
+move	dip	fondo	m
+move	dips	fondos	mp
+move	shrug	encogimiento de hombros	m
+move	shrugs	encogimientos de hombros	mp
+move	fly	apertura	f
+move	flye	apertura	f
+move	flyes	aperturas	fp
+move	flys	aperturas	fp
+move	crossover	cruce en polea	m
+move	extension	extensión	f
+move	extensions	extensiones	fp
+move	leg extension	extensión de cuádriceps	f
+move	leg extensions	extensiones de cuádriceps	fp
+move	hyperextension	hiperextensión	f
+move	hyperextensions	hiperextensiones	fp
+move	pulldown	jalón	m
+move	pulldowns	jalones	mp
+move	pushdown	extensión en polea	f
+move	pushdowns	extensiones en polea	fp
+move	kickback	patada	f
+move	kickbacks	patadas	fp
+move	good morning	buenos días	mp
+move	good mornings	buenos días	mp
+move	hip thrust	hip thrust	m
+move	glute bridge	puente de glúteos	m
+move	bridge	puente	m
+move	plank	plancha	f
+move	clean	cargada	f
+move	power clean	cargada de potencia	f
+move	hang clean	cargada colgante	f
+move	clean and jerk	dos tiempos	m
+move	clean and press	cargada y press	f
+move	snatch	arrancada	f
+move	power snatch	arrancada de potencia	f
+move	hang snatch	arrancada colgante	f
+move	jerk	envión	m
+move	split jerk	envión dividido	m
+move	push jerk	envión de empuje	m
+move	thruster	thruster	m
+move	swing	swing	m
+move	swings	swings	mp
+move	pullover	pullover	m
+move	jump	salto	m
+move	jumps	saltos	mp
+move	box jump	salto al cajón	m
+move	box jumps	saltos al cajón	mp
+move	throw	lanzamiento	m
+move	slam	lanzamiento al suelo	m
+move	rotation	rotación	f
+move	rotations	rotaciones	fp
+move	twist	giro	m
+move	twists	giros	mp
+move	russian twist	giro ruso	m
+move	step up	subida al cajón	f
+move	step ups	subidas al cajón	fp
+move	hip adduction	aducción de cadera	f
+move	hip abduction	abducción de cadera	f
+move	adduction	aducción	f
+move	abduction	abducción	f
+move	rollout	rueda abdominal	f
+move	ab rollout	rueda abdominal	f
+move	ab roller	rueda abdominal	f
+move	walk	caminata	f
+move	farmer walk	paseo del granjero	m
+move	farmers walk	paseo del granjero	m
+move	drag	arrastre	m
+move	sprint	sprint	m
+move	sprints	sprints	mp
+move	face pull	face pull	m
+move	skullcrusher	rompecráneos	m
+move	skull crusher	rompecráneos	m
+move	pull through	pull-through	m
+move	windmill	molino	m
+move	burpee	burpee	m
+move	burpees	burpees	mp
+move	mountain climbers	escaladores	mp
+move	bicycling	bicicleta	f
+move	running	carrera	f
+move	jogging	trote	m
+move	rowing	remo	m
+move	carry	acarreo	m
+move	stair climb	subida de escaleras	f
+move	hop	salto	m
+move	hops	saltos	mp
+move	leap	salto largo	m
+move	bound	salto largo	m
+move	wood chop	leñador	m
+move	woodchop	leñador	m
+move	get up	levantamiento	m
+move	turkish get up	levantamiento turco	m
+move	tuck	recogimiento	m
+move	tucks	recogimientos	mp
+move	jackknife	navaja	f
+move	v up	abdominal en V	m
+move	v ups	abdominales en V	mp
+move	flutter kicks	patadas de tijera	fp
+move	scissors	tijeras	fp
+move	handstand push up	flexión en parada de manos	f
+of	triceps	de tríceps
+of	tricep	de tríceps
+of	biceps	de bíceps
+of	bicep	de bíceps
+of	calf	de gemelos
+of	leg	de piernas
+of	legs	de piernas
+of	wrist	de muñeca
+of	shoulder	de hombros
+of	shoulders	de hombros
+of	chest	de pecho
+of	hip	de cadera
+of	glute	de glúteos
+of	glutes	de glúteos
+of	lat	de dorsales
+of	lats	de dorsales
+of	neck	de cuello
+of	ab	abdominal
+of	abs	abdominal
+of	oblique	de oblicuos
+of	obliques	de oblicuos
+of	hamstring	de isquiotibiales
+of	hamstrings	de isquiotibiales
+of	back	de espalda
+of	rear delt	de deltoides posterior
+of	rear deltoid	de deltoides posterior
+of	delt	de deltoides
+of	knee	de rodilla
+of	external	externa
+of	internal	interna
+mod	incline	inclinado
+mod	decline	declinado
+mod	seated	sentado
+mod	standing	de pie
+mod	lying	tumbado
+mod	prone	boca abajo
+mod	supine	boca arriba
+mod	reverse	inverso
+mod	alternating	alterno
+mod	alternate	alterno
+mod	one arm	a una mano
+mod	single arm	a una mano
+mod	one legged	a una pierna
+mod	one leg	a una pierna
+mod	single leg	a una pierna
+mod	two arm	a dos manos
+mod	two arms	a dos manos
+mod	close grip	con agarre cerrado
+mod	wide grip	con agarre ancho
+mod	narrow grip	con agarre estrecho
+mod	reverse grip	con agarre inverso
+mod	neutral grip	con agarre neutro
+mod	underhand	con agarre supino
+mod	underhand grip	con agarre supino
+mod	overhand	con agarre prono
+mod	palms up	con las palmas hacia arriba
+mod	palms down	con las palmas hacia abajo
+mod	palm up	con la palma hacia arriba
+mod	palm down	con la palma hacia abajo
+mod	narrow stance	con apertura estrecha
+mod	wide stance	con apertura ancha
+mod	overhead	por encima de la cabeza
+mod	behind the neck	tras nuca
+mod	behind neck	tras nuca
+mod	behind the back	por detrás de la espalda
+mod	weighted	con lastre
+mod	front	frontal
+mod	side	lateral
+mod	lateral	lateral
+mod	kneeling	de rodillas
+mod	hanging	colgado
+mod	bent over	inclinado
+mod	flat	plano
+mod	elevated	elevado
+mod	feet elevated	con pies elevados
+mod	isometric	isométrico
+mod	assisted	asistido
+mod	band assisted	asistido con banda
+mod	speed	de velocidad
+mod	double	doble
+mod	high	alto
+mod	low	bajo
+mod	straight arm	con brazos rectos
+mod	straight leg	con piernas rectas
+mod	bent knee	con rodillas flexionadas
+mod	partial	parcial
+mod	single	simple
+mod	explosive	explosivo
+mod	walking	caminando
+mod	stationary	estático
+mod	sumo	sumo
+mod	close	cerrado
+mod	wide	ancho
+mod	cross body	cruzado
+mod	crossbody	cruzado
+mod	from floor	desde el suelo
+mod	from blocks	desde bloques
+mod	from box	desde el cajón
+mod	deficit	con déficit
+mod	pause	con pausa
+gear	dumbbell	con mancuernas
+gear	dumbbells	con mancuernas
+gear	db	con mancuernas
+gear	barbell	con barra
+gear	bar	con barra
+gear	straight bar	con barra recta
+gear	ez bar	con barra Z
+gear	ez	con barra Z
+gear	trap bar	con barra hexagonal
+gear	cable	en polea
+gear	cables	en polea
+gear	pulley	en polea
+gear	low pulley	en polea baja
+gear	high pulley	en polea alta
+gear	kettlebell	con kettlebell
+gear	kettlebells	con kettlebells
+gear	machine	en máquina
+gear	smith machine	en máquina Smith
+gear	smith	en máquina Smith
+gear	leverage	en máquina de palanca
+gear	lever	en máquina de palanca
+gear	band	con banda elástica
+gear	bands	con bandas elásticas
+gear	resistance band	con banda elástica
+gear	medicine ball	con balón medicinal
+gear	exercise ball	en fitball
+gear	stability ball	en fitball
+gear	swiss ball	en fitball
+gear	ball	con balón
+gear	rope	con cuerda
+gear	ropes	con cuerdas
+gear	battling ropes	con cuerdas de batalla
+gear	chains	con cadenas
+gear	chain	con cadenas
+gear	box	en cajón
+gear	bench	en banco
+gear	flat bench	en banco plano
+gear	incline bench	en banco inclinado
+gear	decline bench	en banco declinado
+gear	plate	con disco
+gear	landmine	con landmine
+gear	sled	con trineo
+gear	suspended	en suspensión
+gear	suspension	en suspensión
+gear	trx	en suspensión
+gear	bodyweight	con peso corporal
+gear	body weight	con peso corporal
+gear	rings	en anillas
+gear	ring	en anillas
+gear	floor	en el suelo
+gear	sandbag	con saco de arena
+gear	towel	con toalla
+gear	wall	en la pared
+gear	step	en step
+gear	bosu	en bosu
+gear	rack	en rack
+gear	platform	en plataforma
+gear	parallel bars	en paralelas

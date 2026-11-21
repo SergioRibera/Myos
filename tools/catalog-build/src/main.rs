@@ -4,6 +4,7 @@
 //! ```text
 //! catalog-build catalog    --out DIR --version N [--cache DIR]
 //! catalog-build food-facts --out DIR --version N --countries bo,ar [--input FILE.csv.gz] [--cache DIR]
+//! catalog-build names      --catalog FILE --out FILE  (English names, input of translate.py)
 //! catalog-build manifest   --dir DIR           (signs with $CATALOG_SIGNING_KEY)
 //! catalog-build keygen                          (prints a new seed and its public key)
 //! ```
@@ -11,6 +12,7 @@
 mod catalog;
 mod fetch;
 mod food_facts;
+mod translations;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -86,9 +88,10 @@ impl Args {
     }
 }
 
-const CATALOG_USAGE: &str = "catalog --out DIR --version N [--cache DIR]";
+const CATALOG_USAGE: &str = "catalog --out DIR --version N [--cache DIR] [--translations DIR]";
 const FOOD_FACTS_USAGE: &str =
     "food-facts --out DIR --version N --countries bo,ar [--input FILE.csv.gz] [--cache DIR]";
+const NAMES_USAGE: &str = "names --catalog catalog.db --out names.tsv";
 const MANIFEST_USAGE: &str = "manifest --dir DIR (CATALOG_SIGNING_KEY = hex seed)";
 
 /// Write the manifest of every reference file in `dir` and sign it.
@@ -159,17 +162,22 @@ fn keygen() -> Result<(), BuildError> {
 fn run() -> Result<(), BuildError> {
     let mut raw = std::env::args().skip(1);
     let command = raw.next().ok_or(BuildError::Usage(
-        "catalog | food-facts | manifest | keygen",
+        "catalog | food-facts | names | manifest | keygen",
     ))?;
     let args = Args::parse(raw)?;
     match command.as_str() {
         "catalog" => {
             let out = args.path("out", CATALOG_USAGE)?;
             std::fs::create_dir_all(&out)?;
+            let translations = args.get("translations").map_or_else(
+                || Path::new(env!("CARGO_MANIFEST_DIR")).join("translations"),
+                PathBuf::from,
+            );
             catalog::build(
                 &out.join("catalog.db"),
                 args.version(CATALOG_USAGE)?,
                 &args.cache(),
+                &translations,
             )
         }
         "food-facts" => {
@@ -189,9 +197,13 @@ fn run() -> Result<(), BuildError> {
             food_facts::build(&input, &out, &countries, args.version(FOOD_FACTS_USAGE)?)
         }
         "manifest" => manifest(&args.path("dir", MANIFEST_USAGE)?),
+        "names" => translations::names(
+            &args.path("catalog", NAMES_USAGE)?,
+            &args.path("out", NAMES_USAGE)?,
+        ),
         "keygen" => keygen(),
         _ => Err(BuildError::Usage(
-            "catalog | food-facts | manifest | keygen",
+            "catalog | food-facts | names | manifest | keygen",
         )),
     }
 }
