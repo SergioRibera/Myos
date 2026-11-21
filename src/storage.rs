@@ -13,7 +13,7 @@ use myos_vault::{Stored, Vault, VaultError};
 
 /// App identity, as in `istmo.toml` (`[app] id`): the credential-store
 /// service name.
-const APP_ID: &str = "rs.sergioribera.myos";
+pub const APP_ID: &str = "rs.sergioribera.myos";
 
 /// File name of the user database inside the data directory.
 const DATABASE_FILE: &str = "user.db";
@@ -76,13 +76,19 @@ pub struct Opened {
     pub reset: Option<Reset>,
 }
 
-/// Directory holding the database files.
-fn database_dir() -> PathBuf {
+/// Private app directory: database, reference files.
+#[must_use]
+pub fn app_dir() -> PathBuf {
     #[cfg(target_os = "android")]
     let base = istmo::path::state_dir();
     #[cfg(not(target_os = "android"))]
     let base = istmo::path::data_local_dir();
-    base.join("database")
+    base.to_path_buf()
+}
+
+/// Directory holding the database files.
+fn database_dir() -> PathBuf {
+    app_dir().join("database")
 }
 
 /// Create the database directory and keep it out of OS backups (the key
@@ -123,6 +129,18 @@ pub fn open() -> Result<Opened, StorageError> {
         opened => opened?,
     };
     Ok(Opened { store, reset })
+}
+
+/// A second connection to an existing database, for background work (sync).
+/// Never creates or discards anything: a missing key is an error here.
+pub fn open_secondary() -> Result<Store, StorageError> {
+    let path = database_dir().join(DATABASE_FILE);
+    match Vault::open(APP_ID)?.load()? {
+        Stored::Key(key) => Ok(Store::open(&path, &key)?),
+        Stored::Missing | Stored::Lost => Err(StorageError::Store(myos_store::Error::NotFound(
+            "database key",
+        ))),
+    }
 }
 
 /// Delete the database files in `dir`. Without its key a database is noise:

@@ -41,6 +41,11 @@ monochrome = "brand/app-icon/android/monochrome.png"
 # extensions = ["pdf"]
 # mime_types = ["application/pdf"]
 
+# Bundled reference files (`assets/catalog/`, filled by CI): read with
+# `istmo::assets::open("catalog/…")`.
+[[assets]]
+path = "assets/catalog/"
+
 [min_versions]
 android = 26                      # minSdk
 ios     = "14.0"                  # IPHONEOS_DEPLOYMENT_TARGET

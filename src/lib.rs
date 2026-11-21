@@ -7,7 +7,9 @@
 //! - iOS `staticlib`, linked into the Xcode app — same `mobile_main`.
 
 pub mod app;
+pub mod reference;
 pub mod storage;
+pub mod sync;
 
 #[cfg(not(any(
     target_os = "android",

@@ -38,6 +38,10 @@ myos-store = { path = "crates/store" }
 myos-vault = { path = "crates/vault" }
 thiserror = "2.0"
 myos-backup = { path = "crates/backup" }
+uuid = "1.29"
+zeroize = "1.9"
+myos-sync-http = { path = "crates/sync-http" }
+myos-catalog-update = { path = "crates/catalog-update" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.14"

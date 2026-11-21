@@ -2842,9 +2842,13 @@ dependencies = [
  "istmo-share",
  "log",
  "myos-backup",
+ "myos-catalog-update",
  "myos-store",
+ "myos-sync-http",
  "myos-vault",
  "thiserror 2.0.21",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -21,3 +21,9 @@ result-*
 # JetBrains / VS Code
 .idea/
 .vscode/
+
+# Bundled reference files: downloaded by CI before release builds
+assets/catalog/*
+!assets/catalog/README.md
+# Asset staging written by the build
+android/app/src/main/assets/
