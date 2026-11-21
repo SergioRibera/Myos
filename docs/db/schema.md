@@ -678,9 +678,10 @@ Where `crates/store` refines or departs from the sections above.
   and the app reports `Reset::KeyLost` so the UI offers a restore.
 - **Database location.** Android `istmo::path::state_dir()` (=
   `noBackupFilesDir`), elsewhere `data_local_dir()`, under `database/`.
-  Still to do natively: Android backup rules for the key's
-  `shared_prefs/keyring-default.xml`, iOS/macOS `isExcludedFromBackup` on
-  `database/`.
+  Backups: Android `res/xml/data_extraction_rules.xml` + `backup_rules.xml`
+  exclude the wrapped key (`sharedpref/keyring-default.xml`); iOS / macOS
+  flag `database/` with `NSURLIsExcludedFromBackupKey` on every open
+  (`crates/backup`).
 - **Windows build gap.** `openssl-src` builds MSVC targets with `nmake`, so
   the vendored OpenSSL behind SQLCipher cannot be cross-built from Linux;
   the Windows target needs a prebuilt or separately built static libcrypto

@@ -2404,9 +2404,17 @@ dependencies = [
  "istmo-build",
  "istmo-share",
  "log",
+ "myos-backup",
  "myos-store",
  "myos-vault",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "myos-backup"
+version = "0.1.0"
+dependencies = [
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

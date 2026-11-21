@@ -37,6 +37,7 @@ istmo-share           = "0.1.1-alpha.6"
 myos-store = { path = "crates/store" }
 myos-vault = { path = "crates/vault" }
 thiserror = "2.0"
+myos-backup = { path = "crates/backup" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.14"

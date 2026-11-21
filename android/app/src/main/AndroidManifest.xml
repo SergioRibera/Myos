@@ -3,6 +3,8 @@
     <!-- `${istmoLabel}` / `${istmoIcon}` come from istmo.toml `[app]`. -->
     <application
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:label="${istmoLabel}"
         android:icon="${istmoIcon}"
         android:hasCode="true"

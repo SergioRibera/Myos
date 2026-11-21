@@ -3,8 +3,8 @@
 //! The key lives in the platform credential store ([`myos_vault`]); the
 //! files live in a private app directory: on Android `noBackupFilesDir`
 //! (the key is never in a backup, so the database must not be either), on
-//! the other platforms the local data directory. Backup exclusion of that
-//! directory on iOS / macOS is set by the native side.
+//! the other platforms the local data directory, flagged as excluded from
+//! backups on iOS / macOS ([`myos_backup`]).
 
 use std::path::{Path, PathBuf};
 
@@ -85,13 +85,24 @@ fn database_dir() -> PathBuf {
     base.join("database")
 }
 
-/// Open (creating on first run) the user's database.
-pub fn open() -> Result<Opened, StorageError> {
+/// Create the database directory and keep it out of OS backups (the key
+/// never leaves the device, so a restored copy could not be opened). Run on
+/// every open: recreating the directory drops the flag.
+fn prepare_dir() -> Result<PathBuf, StorageError> {
     let dir = database_dir();
     std::fs::create_dir_all(&dir).map_err(|source| StorageError::Directory {
         path: dir.clone(),
         source,
     })?;
+    if let Err(err) = myos_backup::exclude_from_backup(&dir) {
+        log::warn!("{err}");
+    }
+    Ok(dir)
+}
+
+/// Open (creating on first run) the user's database.
+pub fn open() -> Result<Opened, StorageError> {
+    let dir = prepare_dir()?;
     let path = dir.join(DATABASE_FILE);
     let vault = Vault::open(APP_ID)?;
     let (key, mut reset) = match vault.load()? {
@@ -132,11 +143,7 @@ fn remove_database(dir: &Path) -> Result<(), StorageError> {
 /// Open the database with a passphrase, for systems without a credential
 /// store ([`VaultError::Unavailable`] from [`open`]): the UI asks for it.
 pub fn open_with_passphrase(passphrase: &str) -> Result<Opened, StorageError> {
-    let dir = database_dir();
-    std::fs::create_dir_all(&dir).map_err(|source| StorageError::Directory {
-        path: dir.clone(),
-        source,
-    })?;
+    let dir = prepare_dir()?;
     let store = Store::open(
         dir.join(DATABASE_FILE),
         myos_store::KeySource::Passphrase(passphrase),

@@ -10,6 +10,7 @@ let
     "myos-core"
     "myos-store"
     "myos-vault"
+    "myos-backup"
   ];
   packageFlags = lib.concatMap (name: [
     "-p"

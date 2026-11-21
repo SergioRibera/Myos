@@ -1,0 +1,30 @@
+[package]
+name = "myos-backup"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Keep Myos database files out of OS backups"
+publish = false
+
+[dependencies]
+
+[lints.rust]
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+# Foundation calls on Apple targets; every block carries a SAFETY comment.
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+unwrap_used = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL", "NSString", "NSValue", "NSError", "NSObject"] }
