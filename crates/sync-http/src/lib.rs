@@ -9,8 +9,8 @@ use std::time::Duration;
 use myos_store::tlv::TlvError;
 use myos_store::{PullPage, PushBatch, PushResponse, Transport};
 
-/// Largest response body read.
-const RESPONSE_LIMIT: u64 = 16 * 1024 * 1024;
+/// Largest response body read: the largest message a client decodes.
+const RESPONSE_LIMIT: u64 = myos_sync_wire::message::MESSAGE_LIMIT as u64;
 
 /// Transport failure.
 #[derive(Debug, thiserror::Error)]
@@ -25,9 +25,39 @@ pub enum HttpError {
     /// The token was refused: sign in again.
     #[error("not authorized")]
     Unauthorized,
+    /// The server URL is not `https://` (plain HTTP is allowed only to a
+    /// loopback address, for development).
+    #[error("sync server must be reached over https")]
+    Insecure,
     /// A message could not be encoded or decoded.
     #[error("malformed message")]
     Message(#[from] TlvError),
+}
+
+/// `https://`, or `http://` to a loopback host.
+fn secure(base: &str) -> bool {
+    if base.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = base.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = authority
+        .strip_prefix('[')
+        .and_then(|bracketed| bracketed.split_once(']'))
+        .map_or_else(
+            || {
+                authority
+                    .rsplit_once(':')
+                    .map_or(authority, |(host, _)| host)
+            },
+            |(host, _)| host,
+        );
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 /// HTTPS transport to a sync server.
@@ -48,18 +78,21 @@ impl std::fmt::Debug for HttpTransport {
 
 impl HttpTransport {
     /// Transport to the server at `base` (e.g. `https://sync.example.com`),
-    /// authenticated with `token`.
-    #[must_use]
-    pub fn new(base: &str, token: &str) -> Self {
+    /// authenticated with `token`. The token never travels in clear: plain
+    /// `http://` is refused unless the host is loopback.
+    pub fn new(base: &str, token: &str) -> Result<Self, HttpError> {
+        if !secure(base) {
+            return Err(HttpError::Insecure);
+        }
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(60)))
             .http_status_as_error(false)
             .build();
-        Self {
+        Ok(Self {
             agent: ureq::Agent::new_with_config(config),
             base: base.trim_end_matches('/').to_owned(),
             token: token.to_owned(),
-        }
+        })
     }
 
     fn authorization(&self) -> String {
@@ -102,5 +135,21 @@ impl Transport for HttpTransport {
             .query("limit", limit.to_string())
             .call()?;
         Ok(PullPage::decode(&Self::read(response)?)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::secure;
+
+    #[test]
+    fn plain_http_only_to_loopback() {
+        assert!(secure("https://sync.example.com"));
+        assert!(secure("http://127.0.0.1:8080"));
+        assert!(secure("http://[::1]:8080/"));
+        assert!(secure("http://localhost"));
+        assert!(!secure("http://sync.example.com"));
+        assert!(!secure("http://127.0.0.1.evil.com"));
+        assert!(!secure("ftp://127.0.0.1"));
     }
 }

@@ -23,7 +23,7 @@ CREATE TABLE sync_row (
   received_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, entity, row_id)
 );
-CREATE INDEX sync_row_feed ON sync_row (user_id, rev);
+CREATE UNIQUE INDEX sync_row_feed ON sync_row (user_id, rev);
 
 -- Answers to pushed ops by op id: a retried push gets the same answer.
 CREATE TABLE push_receipt (
@@ -32,6 +32,7 @@ CREATE TABLE push_receipt (
   outcome smallint NOT NULL,
   rev     bigint,
   code    integer,
+  digest  bigint   NOT NULL,      -- what the op carried: a reused id with other content is refused
   at      timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, op_id)
 );
@@ -58,6 +59,10 @@ CREATE POLICY own ON push_receipt
   WITH CHECK (user_id = nullif(current_setting('app.user_id', true), '')::uuid);
 
 -- Receipt purge (all users) runs with `app.maintenance = on` for its
--- transaction; it can only delete receipts.
+-- transaction. A DELETE with a WHERE clause also needs the rows visible, so
+-- maintenance may read receipts (op ids and outcomes, no user data) and
+-- delete them, never write.
 CREATE POLICY maintenance ON push_receipt FOR DELETE
+  USING (current_setting('app.maintenance', true) = 'on');
+CREATE POLICY maintenance_read ON push_receipt FOR SELECT
   USING (current_setting('app.maintenance', true) = 'on');

@@ -707,15 +707,28 @@ Where `crates/store` refines or departs from the sections above.
 - **Sync server (`crates/server`).** axum + `tokio-postgres` / deadpool.
   Opaque store: `sync_row(user_id, entity, row_id, op, hlc, node, rev,
   payload_ver, payload)`, gap-free per-user `rev` from `user_rev` taken in
-  the push transaction, `push_receipt` per op id (purged after 30 days under
-  a delete-only `app.maintenance` policy). Row-level security forced on
-  every table, keyed by `app.user_id` set per transaction; the server role
-  is not a superuser. Ops with clocks > 60 s ahead, invalid TLV or payloads
-  > 1 MiB are rejected; ≤ 500 ops per push, ≤ 1000 rows per pull page.
+  the push transaction and locked before any row (pushes of one user run
+  one at a time: no lost update on new rows, no deadlock, revisions commit
+  in order; `UNIQUE (user_id, rev)`), `push_receipt` per op id with a
+  digest of the op (a reused id with other content is rejected as
+  `replayed`; `future_clock` answers are not remembered), purged after 30
+  days under `app.maintenance` policies (read + delete: a `DELETE … WHERE`
+  needs the rows visible). Row-level security forced on every table, keyed
+  by `app.user_id` set per transaction with statement / lock / idle
+  timeouts; the server role is not a superuser. Everything stored must stay
+  mergeable: entity and payload version in range, TLV and field clocks
+  decodable, row and field clocks ≤ 60 s ahead, payloads ≤ 1 MiB; a merge
+  error rejects the op instead of failing the batch. ≤ 500 ops per push;
+  pull pages ≤ 1000 rows and ~6 MiB of payload (under the 8 MiB message
+  limit). HTTP: 64 requests at once, 30 s timeout. Open: separate
+  migration-owner and runtime roles (the runtime role owns the tables today,
+  so RLS guards against app bugs, not against its credentials) and a
+  migration checksum.
   Messages are TLV (`sync-wire::message`) over `POST /v1/push` and
   `GET /v1/pull`; auth is a pluggable `Authenticator` (static
   `MYOS_DEV_TOKENS` behind the `dev-auth` feature only). Client transport:
-  `crates/sync-http` (ureq + rustls with webpki roots). Typed projections
+  `crates/sync-http` (ureq + rustls with webpki roots; plain `http://` only
+  to loopback, so the token never travels in clear). Typed projections
   for the professional panel and analytics read from `sync_row` later.
   `tests/e2e.rs` runs two devices against a throwaway cluster from the
   devshell (`initdb` / `pg_ctl`).

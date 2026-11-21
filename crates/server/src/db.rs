@@ -18,8 +18,11 @@ const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_sync.sql")];
 const PAYLOAD_LIMIT: usize = 1024 * 1024;
 /// Largest number of ops in one push.
 pub const MAX_OPS: usize = 500;
-/// Largest pull page.
+/// Largest pull page, in rows.
 pub const MAX_PAGE: u32 = 1000;
+/// Largest pull page, in payload bytes (one row always fits): keeps pages
+/// under the message limit clients decode.
+const PAGE_BYTES: i64 = 6 * 1024 * 1024;
 /// Clocks further ahead of the server than this are refused.
 const MAX_AHEAD_MS: u64 = 60 * 1000;
 /// Receipts older than this are purged.
@@ -27,12 +30,15 @@ const RECEIPT_TTL_DAYS: i32 = 30;
 
 /// Reasons a pushed op is refused.
 pub mod reject {
-    /// The op's clock is ahead of the server clock.
+    /// The op's clock (or one of its field clocks) is ahead of the server
+    /// clock. Not remembered: the same op may be retried later.
     pub const FUTURE_CLOCK: u16 = 1;
     /// Malformed op or payload.
     pub const INVALID: u16 = 2;
     /// Payload too large.
     pub const TOO_LARGE: u16 = 3;
+    /// The op id was already used for different content.
+    pub const REPLAYED: u16 = 4;
 }
 
 /// Outcome codes stored in `push_receipt.outcome`.
@@ -45,10 +51,10 @@ const MERGED: i16 = 4;
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     /// `PostgreSQL` reported an error.
-    #[error("database error")]
+    #[error("database error: {0}")]
     Postgres(#[from] tokio_postgres::Error),
     /// No connection could be taken from the pool.
-    #[error("database pool error")]
+    #[error("database pool error: {0}")]
     Pool(#[from] deadpool_postgres::PoolError),
     /// The pool could not be built.
     #[error("database pool setup failed")]
@@ -56,6 +62,14 @@ pub enum DbError {
     /// A stored row is corrupt.
     #[error("stored row is malformed")]
     Corrupt,
+    /// The database was migrated by a newer server.
+    #[error("database schema {found} is newer than this server ({supported})")]
+    NewerSchema {
+        /// Version in the database.
+        found: i32,
+        /// Newest version this build knows.
+        supported: usize,
+    },
 }
 
 /// Server clock, Unix ms.
@@ -80,10 +94,14 @@ impl std::fmt::Debug for Db {
     }
 }
 
-/// Bind every statement of `tx` to `user` (row-level security).
+/// Bind every statement of `tx` to `user` (row-level security) and bound
+/// how long it may run or wait.
 async fn act_as(tx: &Transaction<'_>, user: Uuid) -> Result<(), DbError> {
     tx.execute(
-        "SELECT set_config('app.user_id', $1, true)",
+        "SELECT set_config('app.user_id', $1, true),
+                set_config('statement_timeout', '15s', true),
+                set_config('lock_timeout', '5s', true),
+                set_config('idle_in_transaction_session_timeout', '30s', true)",
         &[&user.to_string()],
     )
     .await?;
@@ -117,6 +135,12 @@ impl Db {
             .query_one("SELECT coalesce(max(version), 0) FROM schema_version", &[])
             .await?
             .get(0);
+        if usize::try_from(applied).is_ok_and(|applied| applied > MIGRATIONS.len()) {
+            return Err(DbError::NewerSchema {
+                found: applied,
+                supported: MIGRATIONS.len(),
+            });
+        }
         for (index, sql) in MIGRATIONS.iter().enumerate() {
             let version = i32::try_from(index + 1).unwrap_or(i32::MAX);
             if version <= applied {
@@ -138,14 +162,34 @@ impl Db {
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
         act_as(&tx, user).await?;
+        // The user's revision row is locked first and held to commit: pushes
+        // of one user run one at a time (no lost update on new rows, no
+        // lock-order deadlock between rows) and revisions commit in order.
+        tx.execute(
+            "INSERT INTO user_rev (user_id) VALUES ($1)
+             ON CONFLICT (user_id) DO UPDATE SET rev = user_rev.rev",
+            &[&user],
+        )
+        .await?;
         let mut outcomes = Vec::with_capacity(batch.ops.len());
         for push in batch.ops.iter().take(MAX_OPS) {
-            let result = if let Some(result) = receipt(&tx, user, push.op_id).await? {
-                result
-            } else {
-                let result = apply(&tx, user, push).await?;
-                store_receipt(&tx, user, push.op_id, result).await?;
-                result
+            let digest = op_digest(push);
+            let result = match receipt(&tx, user, push.op_id).await? {
+                Some((result, stored)) if stored == digest => result,
+                Some(_) => PushResult::Rejected {
+                    code: reject::REPLAYED,
+                },
+                None => {
+                    let result = apply(&tx, user, push).await?;
+                    if result
+                        != (PushResult::Rejected {
+                            code: reject::FUTURE_CLOCK,
+                        })
+                    {
+                        store_receipt(&tx, user, push.op_id, digest, result).await?;
+                    }
+                    result
+                }
             };
             outcomes.push(PushOutcome {
                 op_id: push.op_id,
@@ -156,7 +200,8 @@ impl Db {
         Ok(outcomes)
     }
 
-    /// Rows of `user` with a revision above `after`, oldest first.
+    /// Rows of `user` with a revision above `after`, oldest first, at most
+    /// `limit` rows and about [`PAGE_BYTES`] of payload.
     pub async fn pull(
         &self,
         user: Uuid,
@@ -168,17 +213,18 @@ impl Db {
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
         act_as(&tx, user).await?;
+        // `octet_length` reads the stored size without detoasting.
         let rows = tx
             .query(
-                "SELECT entity, row_id, op, hlc, node, rev, payload_ver, payload FROM sync_row
-                 WHERE user_id = $1 AND rev > $2 ORDER BY rev LIMIT $3",
-                &[&user, &after, &(i64::from(limit) + 1)],
+                "SELECT entity, row_id, op, hlc, node, rev, payload_ver, payload FROM (
+                   SELECT *, sum(octet_length(payload)) OVER (ORDER BY rev) AS running
+                   FROM sync_row WHERE user_id = $1 AND rev > $2 ORDER BY rev LIMIT $3
+                 ) page WHERE running - octet_length(payload) < $4 ORDER BY rev",
+                &[&user, &after, &i64::from(limit), &PAGE_BYTES],
             )
             .await?;
-        tx.commit().await?;
-        let more = rows.len() > limit as usize;
-        let mut page = Vec::with_capacity(rows.len().min(limit as usize));
-        for row in rows.iter().take(limit as usize) {
+        let mut page = Vec::with_capacity(rows.len());
+        for row in &rows {
             let entity: i16 = row.get(0);
             let op_code: i16 = row.get(2);
             let hlc: i64 = row.get(3);
@@ -194,8 +240,17 @@ impl Db {
                 payload: row.get(7),
             });
         }
+        let next = page.last().map_or(after, |row| row.server_rev);
+        let more: bool = tx
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM sync_row WHERE user_id = $1 AND rev > $2)",
+                &[&user, &next],
+            )
+            .await?
+            .get(0);
+        tx.commit().await?;
         Ok(PullPage {
-            next: page.last().map_or(after, |row| row.server_rev),
+            next,
             rows: page,
             more,
             server_time_ms: now_ms(),
@@ -222,14 +277,28 @@ impl Db {
     }
 }
 
+/// Digest of what an op carries, so a reused op id with other content is
+/// told apart from a retry.
+fn op_digest(push: &PushOp) -> i64 {
+    let mut bytes = Vec::with_capacity(push.payload.len() + 48);
+    bytes.extend_from_slice(&push.entity.to_le_bytes());
+    bytes.extend_from_slice(push.row_id.as_bytes());
+    bytes.extend_from_slice(&push.op.to_le_bytes());
+    bytes.extend_from_slice(&push.hlc.to_le_bytes());
+    bytes.extend_from_slice(&push.node.to_le_bytes());
+    bytes.extend_from_slice(&push.payload_ver.to_le_bytes());
+    bytes.extend_from_slice(&push.payload);
+    i64::from_le_bytes(merge::value_hash(Some(&bytes)).to_le_bytes())
+}
+
 async fn receipt(
     tx: &Transaction<'_>,
     user: Uuid,
     op_id: Uuid,
-) -> Result<Option<PushResult>, DbError> {
+) -> Result<Option<(PushResult, i64)>, DbError> {
     let Some(row) = tx
         .query_opt(
-            "SELECT outcome, rev, code FROM push_receipt WHERE user_id = $1 AND op_id = $2",
+            "SELECT outcome, rev, code, digest FROM push_receipt WHERE user_id = $1 AND op_id = $2",
             &[&user, &op_id],
         )
         .await?
@@ -239,28 +308,26 @@ async fn receipt(
     let outcome: i16 = row.get(0);
     let rev: Option<i64> = row.get(1);
     let code: Option<i32> = row.get(2);
-    Ok(Some(match outcome {
-        APPLIED => PushResult::Applied {
-            server_rev: rev.ok_or(DbError::Corrupt)?,
-        },
-        SUPERSEDED => PushResult::Superseded {
-            server_rev: rev.ok_or(DbError::Corrupt)?,
-        },
-        MERGED => PushResult::Merged {
-            server_rev: rev.ok_or(DbError::Corrupt)?,
-        },
-        _ => PushResult::Rejected {
+    let rev = || rev.ok_or(DbError::Corrupt);
+    let result = match outcome {
+        APPLIED => PushResult::Applied { server_rev: rev()? },
+        SUPERSEDED => PushResult::Superseded { server_rev: rev()? },
+        MERGED => PushResult::Merged { server_rev: rev()? },
+        REJECTED => PushResult::Rejected {
             code: code
                 .and_then(|code| u16::try_from(code).ok())
                 .ok_or(DbError::Corrupt)?,
         },
-    }))
+        _ => return Err(DbError::Corrupt),
+    };
+    Ok(Some((result, row.get(3))))
 }
 
 async fn store_receipt(
     tx: &Transaction<'_>,
     user: Uuid,
     op_id: Uuid,
+    digest: i64,
     result: PushResult,
 ) -> Result<(), DbError> {
     let (outcome, rev, code) = match result {
@@ -270,46 +337,79 @@ async fn store_receipt(
         PushResult::Rejected { code } => (REJECTED, None, Some(i32::from(code))),
     };
     tx.execute(
-        "INSERT INTO push_receipt (user_id, op_id, outcome, rev, code) VALUES ($1, $2, $3, $4, $5)",
-        &[&user, &op_id, &outcome, &rev, &code],
+        "INSERT INTO push_receipt (user_id, op_id, outcome, rev, code, digest)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+        &[&user, &op_id, &outcome, &rev, &code, &digest],
     )
     .await?;
     Ok(())
 }
 
-/// Validate one op; `Err(code)` refuses it.
-fn validate(push: &PushOp) -> Result<(Tlv, i64), u16> {
+/// An op that passed validation, in storage types.
+struct Valid {
+    payload: Tlv,
+    entity: i16,
+    payload_ver: i16,
+    hlc: i64,
+}
+
+/// Validate one op; `Err(code)` refuses it. Everything stored here must be
+/// readable by every later merge, or one bad op would block the row.
+fn validate(push: &PushOp) -> Result<Valid, u16> {
     if !(op::UPSERT..=op::RESTORE).contains(&push.op) {
         return Err(reject::INVALID);
     }
+    let entity = i16::try_from(push.entity)
+        .ok()
+        .filter(|entity| *entity > 0)
+        .ok_or(reject::INVALID)?;
+    let payload_ver = i16::try_from(push.payload_ver)
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or(reject::INVALID)?;
     if push.payload.len() > PAYLOAD_LIMIT {
         return Err(reject::TOO_LARGE);
     }
     let now = u64::try_from(now_ms()).unwrap_or(0);
-    if (push.hlc >> 16) > now.saturating_add(MAX_AHEAD_MS) {
+    let ahead = |hlc: u64| (hlc >> 16) > now.saturating_add(MAX_AHEAD_MS);
+    if ahead(push.hlc) {
         return Err(reject::FUTURE_CLOCK);
     }
     let hlc = i64::try_from(push.hlc).map_err(|_| reject::INVALID)?;
     let payload = Tlv::decode(&push.payload, PAYLOAD_LIMIT).map_err(|_| reject::INVALID)?;
-    Ok((payload, hlc))
+    let clocks = merge::read_clocks(&payload).map_err(|_| reject::INVALID)?;
+    if clocks.values().any(|clock| ahead(clock.hlc)) {
+        return Err(reject::FUTURE_CLOCK);
+    }
+    if clocks
+        .values()
+        .any(|clock| i64::try_from(clock.hlc).is_err())
+    {
+        return Err(reject::INVALID);
+    }
+    Ok(Valid {
+        payload,
+        entity,
+        payload_ver,
+        hlc,
+    })
 }
 
 /// Merge one op into the stored row under the shared rules.
 async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushResult, DbError> {
-    let (incoming, hlc) = match validate(push) {
+    let valid = match validate(push) {
         Ok(valid) => valid,
         Err(code) => return Ok(PushResult::Rejected { code }),
     };
-    let entity = i16::try_from(push.entity).map_err(|_| DbError::Corrupt)?;
     let stored = tx
         .query_opt(
             "SELECT op, hlc, node, rev, payload FROM sync_row
-             WHERE user_id = $1 AND entity = $2 AND row_id = $3 FOR UPDATE",
-            &[&user, &entity, &push.row_id],
+             WHERE user_id = $1 AND entity = $2 AND row_id = $3",
+            &[&user, &valid.entity, &push.row_id],
         )
         .await?;
     let (op_code, hlc, node, payload, merged) = match stored {
-        None => (push.op, hlc, push.node, push.payload.clone(), false),
+        None => (push.op, valid.hlc, push.node, push.payload.clone(), false),
         Some(row) => {
             let stored_op: i16 = row.get(0);
             let stored_hlc: i64 = row.get(1);
@@ -327,10 +427,13 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
                 op: push.op,
                 hlc: push.hlc,
                 node: push.node,
-                payload: &incoming,
+                payload: &valid.payload,
             };
-            let outcome =
-                merge::resolve(&stored_version, &incoming_version).map_err(|_| DbError::Corrupt)?;
+            let Ok(outcome) = merge::resolve(&stored_version, &incoming_version) else {
+                return Ok(PushResult::Rejected {
+                    code: reject::INVALID,
+                });
+            };
             match outcome {
                 Outcome::KeepStored => {
                     return Ok(PushResult::Superseded {
@@ -339,7 +442,7 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
                 }
                 Outcome::TakeIncoming => (
                     merge::op_after(&stored_version, &incoming_version),
-                    hlc,
+                    valid.hlc,
                     push.node,
                     push.payload.clone(),
                     false,
@@ -360,15 +463,12 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
     };
     let rev: i64 = tx
         .query_one(
-            "INSERT INTO user_rev (user_id, rev) VALUES ($1, 1)
-             ON CONFLICT (user_id) DO UPDATE SET rev = user_rev.rev + 1
-             RETURNING rev",
+            "UPDATE user_rev SET rev = rev + 1 WHERE user_id = $1 RETURNING rev",
             &[&user],
         )
         .await?
         .get(0);
     let op_code = i16::try_from(op_code).map_err(|_| DbError::Corrupt)?;
-    let payload_ver = i16::try_from(push.payload_ver).map_err(|_| DbError::Corrupt)?;
     tx.execute(
         "INSERT INTO sync_row (user_id, entity, row_id, op, hlc, node, rev, payload_ver, payload)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -378,13 +478,13 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
            received_at = now()",
         &[
             &user,
-            &entity,
+            &valid.entity,
             &push.row_id,
             &op_code,
             &hlc,
             &node,
             &rev,
-            &payload_ver,
+            &valid.payload_ver,
             &payload,
         ],
     )

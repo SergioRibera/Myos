@@ -4,6 +4,7 @@
 //! `Authorization: Bearer <token>`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
@@ -13,6 +14,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use myos_sync_wire::message::MESSAGE_LIMIT;
 use myos_sync_wire::protocol::{PushBatch, PushResponse};
+use tower::limit::ConcurrencyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
@@ -36,6 +39,9 @@ impl std::fmt::Debug for AppState {
             .finish_non_exhaustive()
     }
 }
+
+/// Requests handled at once.
+const MAX_CONCURRENT: usize = 64;
 
 /// Query of `GET /v1/pull`.
 #[derive(Debug)]
@@ -68,6 +74,13 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/push", post(push))
         .route("/v1/pull", get(pull))
         .layer(DefaultBodyLimit::max(MESSAGE_LIMIT))
+        // Requests past these wait in line or time out instead of piling up
+        // memory (a push decodes up to the message limit several times).
+        .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ))
         .with_state(state)
 }
 
@@ -85,7 +98,14 @@ fn binary(bytes: Vec<u8>) -> Response {
 }
 
 fn internal(error: &dyn std::error::Error) -> StatusCode {
-    tracing::error!(%error, "request failed");
+    let mut chain = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        chain.push_str(": ");
+        chain.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    tracing::error!(error = %chain, "request failed");
     StatusCode::INTERNAL_SERVER_ERROR
 }
 

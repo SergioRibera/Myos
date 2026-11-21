@@ -18,6 +18,8 @@ myos-sync-wire = { path = "../sync-wire" }
 thiserror = "2.0"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
+tower = { version = "0.5", default-features = false, features = ["limit"] }
+tower-http = { version = "0.6", default-features = false, features = ["timeout"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = "1.29"
