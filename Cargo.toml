@@ -1,6 +1,6 @@
 [workspace]
 # The app is the root package; shared libraries live under `crates/`.
-members  = ["crates/*"]
+members  = ["crates/*", "tools/*"]
 resolver = "3"
 
 [package]
