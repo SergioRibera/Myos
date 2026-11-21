@@ -19,7 +19,7 @@ use myos_store::catalog::{Reference, ReferenceInfo, SCHEMA_VERSION};
 const PUBLISH_URL: &str = "https://github.com/SergioRibera/myos/releases/download/catalog";
 /// Public key of the catalog signing key (`catalog-build keygen`). Empty:
 /// remote updates are off and only the bundled catalog is used.
-const PUBLIC_KEY: &str = "";
+const PUBLIC_KEY: &str = "f9ad66aa4999d2d620402c6416177e6dd26c87bd2c1d01c29c2d56e5e81fb1db";
 
 /// Sources and licenses of the reference data, for the app's about /
 /// attributions screen (the Open Food Facts license requires it).
