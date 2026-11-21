@@ -437,6 +437,24 @@ mod tests {
     }
 
     #[test]
+    fn signatures_made_by_the_openssl_cli_verify() -> Result<(), UpdateError> {
+        // Signed by `.github/scripts/catalog-sig.sh sign` with seed SEED.
+        let text = "myos-catalog-manifest 1\ncatalog catalog.db 1 7 10 \
+                    0707070707070707070707070707070707070707070707070707070707070707\n";
+        let signature = "5f10e1701ece0118e2ead2aa4b97cf6fe855cafb5a9a3bff3b6bef7133bc7a8f\
+                         806b152991fb7d28b452da4d3c80ffa2acb63de118b0bf4c88452c8a03af8402";
+        let key = verifying_key(&public_key(SEED)?)?;
+        assert_eq!(
+            Manifest::verify(text, signature, &key)?
+                .catalog()
+                .map(|e| e.version),
+            Some(7)
+        );
+        assert_eq!(sign(text, SEED)?, signature, "ed25519 is deterministic");
+        Ok(())
+    }
+
+    #[test]
     fn hostile_manifests_are_refused() {
         for text in [
             "",

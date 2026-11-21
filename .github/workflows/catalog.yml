@@ -2,11 +2,17 @@ name: catalog
 
 # Builds the reference files (catalog.db, off-<cc>.db), smoke-tests them with
 # the app's store, signs the manifest and publishes everything twice: as
-# `catalog-v<version>` (history) and on the moving `catalog` release the app
-# downloads from. Release builds bundle the newest `catalog.db`.
+# `catalog-v<version>` (immutable history, what release builds bundle) and
+# on the moving `catalog` release the app downloads updates from.
 #
-# Needs the CATALOG_SIGNING_KEY secret (`cargo run -p catalog-build --
-# keygen`); its public key goes into `src/reference.rs` (`PUBLIC_KEY`).
+# Three jobs keep the signing key away from the Rust build: `build` runs
+# cargo with a read-only token and no secrets; `sign` runs only OpenSSL, in
+# the `catalog-signing` environment, from main; `publish` holds the write
+# token and nothing else.
+#
+# Setup: `cargo run -p catalog-build -- keygen`; seed → secret
+# CATALOG_SIGNING_KEY of the `catalog-signing` environment (restrict it to
+# main in the repo settings); public key → `PUBLIC_KEY` in src/reference.rs.
 
 on:
   workflow_dispatch:
@@ -30,8 +36,7 @@ on:
   #     - "tools/catalog-build/**"
   #     - "crates/store/migrations/catalog/**"
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: catalog
@@ -39,30 +44,27 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CACHE_DIR: ${{ github.workspace }}/.catalog-cache
 
 jobs:
   build:
-    name: build and publish
+    name: build and test
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    env:
+      CACHE_DIR: ${{ github.workspace }}/.catalog-cache
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
-      - name: signing key present
-        env:
-          CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}
-        run: |
-          if [ -z "$CATALOG_SIGNING_KEY" ]; then
-            echo "::error::CATALOG_SIGNING_KEY secret missing (cargo run -p catalog-build -- keygen)"
-            exit 1
-          fi
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      # Pinned sources only (checked by SHA-256); the OFF export changes daily.
-      - uses: actions/cache@v4
+      # Pinned sources only (re-hashed after restore); the OFF export changes daily.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.CACHE_DIR }}
           key: catalog-sources-${{ hashFiles('tools/catalog-build/src/fetch.rs') }}
@@ -72,36 +74,120 @@ jobs:
         run: echo "version=$(date -u +%Y%m%d%H)" >> "$GITHUB_OUTPUT"
 
       - name: catalog.db
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: >
           cargo run --release --locked -p catalog-build --
-          catalog --out dist --version ${{ steps.v.outputs.version }} --cache "$CACHE_DIR"
+          catalog --out dist --version "$VERSION" --cache "$CACHE_DIR"
 
       - name: food facts
         if: inputs.food_facts
-        run: |
-          # Streamed from disk: the cache keeps it out of memory, not across runs.
-          cargo run --release --locked -p catalog-build -- \
-            food-facts --out dist --version ${{ steps.v.outputs.version }} \
-            --countries "${{ inputs.countries }}" --cache "$RUNNER_TEMP/off"
+        env:
+          COUNTRIES: ${{ inputs.countries }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: >
+          cargo run --release --locked -p catalog-build --
+          food-facts --out dist --version "$VERSION"
+          --countries "$COUNTRIES" --cache "$RUNNER_TEMP/off"
 
+      # Kept files are re-signed below, so they must match the previous
+      # signed manifest first.
       - name: keep published food facts
         if: ${{ !inputs.food_facts }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download catalog --pattern 'off-*.db' --dir dist || echo "none published yet"
+        run: |
+          set -euo pipefail
+          pub=$(bash .github/scripts/catalog-sig.sh public-key)
+          prev=$(mktemp -d)
+          if ! gh release download catalog --repo "$GITHUB_REPOSITORY" \
+              --pattern manifest --pattern manifest.sig --pattern 'off-*.db' --dir "$prev"; then
+            echo "nothing published yet"
+            exit 0
+          fi
+          if [ -z "$pub" ]; then
+            echo "::error::PUBLIC_KEY unset in src/reference.rs: cannot vet the published files"
+            exit 1
+          fi
+          bash .github/scripts/catalog-sig.sh verify "$prev" "$pub"
+          cp "$prev"/off-*.db dist/
 
       - name: smoke test with the app's store
         run: CATALOG_DIST="$PWD/dist" cargo test --release --locked -p catalog-build
 
-      - name: sign manifest
-        env:
-          CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}
+      - name: manifest (unsigned)
         run: cargo run --release --locked -p catalog-build -- manifest --dir dist
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: catalog-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: sign manifest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: catalog-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            src/reference.rs
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: catalog-dist
+          path: dist
+      - name: sign
+        env:
+          CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CATALOG_SIGNING_KEY" ]; then
+            echo "::error::CATALOG_SIGNING_KEY missing in the catalog-signing environment"
+            exit 1
+          fi
+          signer=$(bash .github/scripts/catalog-sig.sh sign dist)
+          app=$(bash .github/scripts/catalog-sig.sh public-key)
+          echo "signed with public key $signer"
+          if [ -n "$app" ] && [ "$app" != "$signer" ]; then
+            echo "::error::signing key does not match PUBLIC_KEY in src/reference.rs"
+            exit 1
+          fi
+          [ -n "$app" ] || echo "::warning::PUBLIC_KEY unset in src/reference.rs: apps will not accept updates yet"
+          bash .github/scripts/catalog-sig.sh verify dist "$signer"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: catalog-signature
+          path: dist/manifest.sig
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: catalog-dist
+          path: dist
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: catalog-signature
+          path: dist
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.v.outputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -113,18 +199,19 @@ jobs:
           - Foods: USDA FoodData Central, Foundation Foods and SR Legacy (CC0).
           - Barcodes: Open Food Facts (ODbL / DbCL), one file per country.
 
-          \`manifest\` lists every file with its version, size and SHA-256;
-          \`manifest.sig\` is its ed25519 signature.
+          \`manifest\` lists every file with its schema, version, size and
+          SHA-256; \`manifest.sig\` is its ed25519 signature.
           EON
           files=(catalog.db off-*.db manifest manifest.sig)
-          gh release create "catalog-v$VERSION" "${files[@]}" \
-            --title "Catalog $VERSION" --notes-file NOTES.md --latest=false
-          if ! gh release view catalog >/dev/null 2>&1; then
-            gh release create catalog --title "Catalog (current)" \
+          repo=(--repo "$GITHUB_REPOSITORY")
+          gh release create "catalog-v$VERSION" "${files[@]}" "${repo[@]}" \
+            --target "$GITHUB_SHA" --title "Catalog $VERSION" --notes-file NOTES.md --latest=false
+          if ! gh release view catalog "${repo[@]}" >/dev/null 2>&1; then
+            gh release create catalog "${repo[@]}" --target "$GITHUB_SHA" --title "Catalog (current)" \
               --notes "Moving release: the current reference files. History: catalog-v* releases." \
               --latest=false
           fi
           # Files first, manifest last: a client never sees a manifest whose
           # files are not there yet.
-          gh release upload catalog catalog.db off-*.db --clobber
-          gh release upload catalog manifest manifest.sig --clobber
+          gh release upload catalog catalog.db off-*.db "${repo[@]}" --clobber
+          gh release upload catalog manifest manifest.sig "${repo[@]}" --clobber

@@ -90,11 +90,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.ref }}
+      - uses: cachix/install-nix-action@v31
+      # OpenSSL 3 + GNU coreutils from Nix: macOS ships LibreSSL and BSD stat.
       - name: bundled catalog
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/fetch-catalog.sh
-      - uses: cachix/install-nix-action@v31
+        run: nix shell nixpkgs#openssl nixpkgs#coreutils nixpkgs#xxd nixpkgs#gh -c bash .github/scripts/fetch-catalog.sh
       - name: bundles
         run: nix build -L .#bundles -o result-bundles
       - name: stage
@@ -120,11 +121,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.ref }}
+      - uses: cachix/install-nix-action@v31
+      # OpenSSL 3 + GNU coreutils from Nix: macOS ships LibreSSL and BSD stat.
       - name: bundled catalog
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/fetch-catalog.sh
-      - uses: cachix/install-nix-action@v31
+        run: nix shell nixpkgs#openssl nixpkgs#coreutils nixpkgs#xxd nixpkgs#gh -c bash .github/scripts/fetch-catalog.sh
       - name: bundles
         run: nix build -L .#windows-bundles -o result-bundles
       - name: stage

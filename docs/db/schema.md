@@ -715,17 +715,27 @@ Where `crates/store` refines or departs from the sections above.
   are English only for now (the store falls back to English); Spanish
   names come from curation. Version = UTC `YYYYMMDDHH`. Output files are
   journal-less, FTS-optimized, integrity- and FK-checked, then opened by
-  the app's store in a smoke test. `manifest` (file, version, size,
-  SHA-256) is signed with ed25519 (`CATALOG_SIGNING_KEY`); published as
-  `catalog-v<version>` and on the moving `catalog` release (files before
-  manifest). Manual trigger only (`workflow_dispatch`); weekly schedule and
+  the app's store in a smoke test. `manifest` (file, schema, version,
+  size, SHA-256) is signed with ed25519. Jobs: `build` (cargo, read-only
+  token, no secrets) → `sign` (OpenSSL only, `catalog-signing` environment
+  holding `CATALOG_SIGNING_KEY`, main only; the key must match the app's
+  `PUBLIC_KEY`) → `publish` (write token): `catalog-v<version>` and the
+  moving `catalog` release (files before manifest). Food facts kept from a
+  previous run are re-verified against its signed manifest before
+  re-signing. Release builds fetch from the immutable `catalog-v<version>`
+  named by the current manifest and verify signature and hashes
+  (`.github/scripts/catalog-sig.sh`, same bytes as the Rust verifier, pinned
+  by a test). Actions in this workflow are pinned by SHA. Manual trigger only (`workflow_dispatch`); weekly schedule and
   push-on-pipeline-change triggers are written but commented out.
 - **App reference files (`src/reference.rs`).** Release builds download
   the current `catalog.db` + `manifest` into `assets/catalog/` (bundled as
   istmo assets); on start the bundled copy replaces the installed one when
   newer. A background thread fetches the signed manifest and downloads
   newer files (size + SHA-256 checked, `.part` then rename); the UI loop
-  calls `App::poll` to swap them in on its own connection. Remote updates
+  calls `App::poll` to swap them in on its own connection; a file that
+  does not attach (newer schema, damage) is dropped and the current one
+  stays. Entries of another schema are skipped. `poll` re-checks every
+  24 h and after a country change during a check. Remote updates
   stay off until `PUBLIC_KEY` holds the signing key's public half.
   Food facts follow `App::set_food_facts_country`.
 - **App sync (`src/sync.rs`).** The account (server, user, token, account
