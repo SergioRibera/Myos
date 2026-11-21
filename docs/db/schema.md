@@ -693,6 +693,17 @@ Where `crates/store` refines or departs from the sections above.
   exclude the wrapped key (`sharedpref/keyring-default.xml`); iOS / macOS
   flag `database/` with `NSURLIsExcludedFromBackupKey` on every open
   (`crates/backup`).
+- **Reference files (`catalog.rs`).** `catalog.db` and one `off-<cc>.db`
+  attach as `catalog` / `off` through a percent-encoded
+  `file:…?mode=ro&immutable=1` URI with `KEY ''`; both carry
+  `schema_version` (this build reads 1) and `version` in their meta table,
+  anything else is refused and left detached. Detach flushes the statement
+  cache first; `replace_reference` = detach, `rename`, attach (signature
+  checks belong to the downloader). Schemas ship as `CATALOG_SCHEMA` /
+  `FOOD_FACTS_SCHEMA` for the pipeline. `Store::catalog()` loads every
+  exercise (retired too) into a `Catalog: ExerciseLookup` for
+  `refresh_derived`; searches are FTS5 prefix matches per word (quoted, so
+  user input never reaches FTS syntax), active rows only, bm25 order.
 - **Sync server (`crates/server`).** axum + `tokio-postgres` / deadpool.
   Opaque store: `sync_row(user_id, entity, row_id, op, hlc, node, rev,
   payload_ver, payload)`, gap-free per-user `rev` from `user_rev` taken in

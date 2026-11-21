@@ -4,6 +4,7 @@
 //! transaction that stamps the row with a hybrid logical clock, bumps the
 //! local sequence and queues the row in the sync outbox.
 
+pub mod catalog;
 mod content;
 mod convert;
 mod derived;
@@ -111,6 +112,10 @@ pub enum Error {
     /// A structured column or payload is malformed.
     #[error("malformed record: {0}")]
     Payload(#[from] crate::tlv::TlvError),
+    /// A reference file (catalog, food facts) is missing its metadata or
+    /// uses a schema this build does not read.
+    #[error("reference file is unreadable or of another schema")]
+    ReferenceUnreadable,
 }
 
 /// Where the database lives.
