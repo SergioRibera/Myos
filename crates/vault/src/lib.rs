@@ -69,6 +69,7 @@ pub enum Stored {
 /// The app's entry in the credential store.
 #[derive(Debug)]
 pub struct Vault {
+    app_id: String,
     entry: Entry,
 }
 
@@ -121,7 +122,8 @@ impl Vault {
     pub fn open(app_id: &str) -> Result<Self, VaultError> {
         ensure_store()?;
         Ok(Self {
-            entry: new_entry(app_id)?,
+            app_id: app_id.to_owned(),
+            entry: new_entry(app_id, KEY_ACCOUNT)?,
         })
     }
 
@@ -159,6 +161,32 @@ impl Vault {
         }
     }
 
+    /// Read the secret stored under `name` (another account of the app's
+    /// service, e.g. the sync credentials); `None` when there is none or it
+    /// cannot be read back.
+    pub fn secret(&self, name: &str) -> Result<Option<Zeroizing<String>>, VaultError> {
+        match new_entry(&self.app_id, name)?.get_password() {
+            Ok(text) => Ok(Some(Zeroizing::new(text))),
+            Err(
+                StoreError::NoEntry | StoreError::BadDataFormat(..) | StoreError::BadEncoding(_),
+            ) => Ok(None),
+            Err(other) => Err(other.into()),
+        }
+    }
+
+    /// Store `value` under `name`, replacing what was there.
+    pub fn set_secret(&self, name: &str, value: &str) -> Result<(), VaultError> {
+        Ok(new_entry(&self.app_id, name)?.set_password(value)?)
+    }
+
+    /// Delete the secret stored under `name`.
+    pub fn forget_secret(&self, name: &str) -> Result<(), VaultError> {
+        match new_entry(&self.app_id, name)?.delete_credential() {
+            Ok(()) | Err(StoreError::NoEntry) => Ok(()),
+            Err(other) => Err(other.into()),
+        }
+    }
+
     /// Delete the stored key (logout wipes the database with it).
     pub fn forget(&self) -> Result<(), VaultError> {
         match self.entry.delete_credential() {
@@ -169,22 +197,22 @@ impl Vault {
 }
 
 #[cfg(target_os = "ios")]
-fn new_entry(app_id: &str) -> Result<Entry, StoreError> {
+fn new_entry(app_id: &str, account: &str) -> Result<Entry, StoreError> {
     let modifiers =
         std::collections::HashMap::from([("access-policy", "after-first-unlock-this-device-only")]);
-    Entry::new_with_modifiers(app_id, KEY_ACCOUNT, &modifiers)
+    Entry::new_with_modifiers(app_id, account, &modifiers)
 }
 
 #[cfg(target_os = "windows")]
-fn new_entry(app_id: &str) -> Result<Entry, StoreError> {
+fn new_entry(app_id: &str, account: &str) -> Result<Entry, StoreError> {
     // The default (`Enterprise`) roams with domain profiles.
     let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
-    Entry::new_with_modifiers(app_id, KEY_ACCOUNT, &modifiers)
+    Entry::new_with_modifiers(app_id, account, &modifiers)
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "windows")))]
-fn new_entry(app_id: &str) -> Result<Entry, StoreError> {
-    Entry::new(app_id, KEY_ACCOUNT)
+fn new_entry(app_id: &str, account: &str) -> Result<Entry, StoreError> {
+    Entry::new(app_id, account)
 }
 
 #[cfg(all(
