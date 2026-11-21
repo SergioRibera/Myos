@@ -247,3 +247,15 @@ fn products_are_found_by_barcode_and_name() {
     assert_eq!(store.search_products("griego", 5).unwrap()[0].id, "7790001");
     assert!(store.product("000").unwrap().is_none());
 }
+
+#[test]
+fn english_names_answer_when_a_language_has_none() {
+    let dir = Dir::new();
+    let path = dir.path("catalog.db");
+    build_catalog(&path, 1);
+    let mut store = store();
+    store.attach_reference(Reference::Catalog, &path).unwrap();
+    // No German names: the English ones answer.
+    let hits = store.search_exercises("bench", "de", 5).unwrap();
+    assert_eq!(hits[0].name, "Bench press");
+}

@@ -27,6 +27,10 @@ pub const FOOD_FACTS_SCHEMA: &str = include_str!("../migrations/catalog/food_fac
 /// `schema_version` this build reads, in both files' meta tables.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Language searched when the requested one has no match (the source
+/// names of the catalog).
+const FALLBACK_LANG: &str = "en";
+
 /// Largest number of search results.
 const MAX_HITS: u32 = 100;
 
@@ -339,7 +343,8 @@ impl Store {
     }
 
     /// Active catalog exercises whose name or aliases in `lang` match every
-    /// word of `query` (prefixes), best match first.
+    /// word of `query` (prefixes), best match first; English names are
+    /// searched when nothing matches in `lang`.
     pub fn search_exercises(
         &self,
         query: &str,
@@ -387,6 +392,21 @@ impl Store {
         lang: &str,
         limit: u32,
     ) -> Result<Vec<Hit<T>>, Error> {
+        let hits = self.search_in(reference, sql, query, lang, limit)?;
+        if hits.is_empty() && lang != FALLBACK_LANG {
+            return self.search_in(reference, sql, query, FALLBACK_LANG, limit);
+        }
+        Ok(hits)
+    }
+
+    fn search_in<T: From<Uuid>>(
+        &self,
+        reference: Reference,
+        sql: &str,
+        query: &str,
+        lang: &str,
+        limit: u32,
+    ) -> Result<Vec<Hit<T>>, Error> {
         let conn = self.conn();
         let Some(fts) = fts_query(query) else {
             return Ok(Vec::new());
@@ -412,9 +432,9 @@ impl Store {
         Ok(hits)
     }
 
-    /// A catalog food with its name and portions in `lang`; `None` when it
-    /// is unknown, has no name in `lang` or carries nutrients this build
-    /// does not know.
+    /// A catalog food with its name and portions in `lang` (English when it
+    /// has none in `lang`); `None` when it is unknown, has no name in either
+    /// or carries nutrients this build does not know.
     pub fn catalog_food(&self, id: FoodId, lang: &str) -> Result<Option<CatalogFood>, Error> {
         let conn = self.conn();
         if !attached(conn, Reference::Catalog)? {
@@ -425,10 +445,10 @@ impl Store {
         let Some((name, replaced_by)) = conn
             .prepare_cached(
                 "SELECT n.name, f.replaced_by FROM catalog.food f
-                 JOIN catalog.food_name n ON n.food_id = f.id AND n.lang = ?2
-                 WHERE f.id = ?1",
+                 JOIN catalog.food_name n ON n.food_id = f.id AND n.lang IN (?2, ?3)
+                 WHERE f.id = ?1 ORDER BY n.lang = ?2 DESC LIMIT 1",
             )?
-            .query_row(params![key, lang], |row| {
+            .query_row(params![key, lang, FALLBACK_LANG], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?))
             })
             .optional()?
@@ -453,9 +473,12 @@ impl Store {
         let portions = conn
             .prepare_cached(
                 "SELECT label, grams_mg FROM catalog.food_portion
-                 WHERE food_id = ?1 AND lang = ?2 ORDER BY position",
+                 WHERE food_id = ?1 AND lang = (
+                   SELECT lang FROM catalog.food_portion
+                   WHERE food_id = ?1 AND lang IN (?2, ?3) ORDER BY lang = ?2 DESC LIMIT 1)
+                 ORDER BY position",
             )?
-            .query_map(params![key, lang], |row| {
+            .query_map(params![key, lang, FALLBACK_LANG], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?
             .filter_map(|row| match row {
