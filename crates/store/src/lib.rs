@@ -9,6 +9,7 @@ mod convert;
 mod derived;
 mod diet;
 mod exercises;
+mod export;
 mod hlc;
 mod ids;
 mod key;
@@ -23,7 +24,7 @@ mod sync;
 pub mod tlv;
 mod training;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior};
 use uuid::Uuid;
@@ -31,8 +32,9 @@ use uuid::Uuid;
 pub use derived::RefreshStats;
 pub use diet::{FoodId, MealsRead};
 pub use exercises::CustomExercise;
+pub use export::EXPORT_KDF_ITER;
 pub use hlc::Hlc;
-pub use key::DatabaseKey;
+pub use key::{DatabaseKey, KeySource, MIN_PASSPHRASE_CHARS};
 pub use plan::Read;
 pub use profile::MeasurementsRead;
 pub use replication::{
@@ -103,6 +105,9 @@ pub enum Error {
     /// The transport failed; queued writes are retried later.
     #[error("sync transport failed")]
     Transport(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// A file operation failed (export, import, wipe).
+    #[error("file operation failed")]
+    Io(#[source] std::io::Error),
     /// A structured column or payload is malformed.
     #[error("malformed record: {0}")]
     Payload(#[from] crate::tlv::TlvError),
@@ -128,20 +133,30 @@ pub(crate) struct Stamp {
 #[derive(Debug)]
 pub struct Store {
     conn: Connection,
+    /// File of the main database; `None` in memory.
+    path: Option<PathBuf>,
 }
 
 impl Store {
-    /// Open (or create) `user.db` at `path` with `key`, and migrate it. The
+    /// Open (or create) `user.db` at `path`, unlocked by `key` (a
+    /// [`DatabaseKey`] or a [`KeySource::Passphrase`]), and migrate it. The
     /// derived cache lives next to it (`<name>.derived.db`, same key).
     ///
     /// # Errors
     ///
     /// [`Error::WrongKey`] when the key does not open the file,
     /// [`Error::NewerSchema`] when a newer app wrote it.
-    pub fn open(path: impl AsRef<Path>, key: &DatabaseKey) -> Result<Self, Error> {
+    pub fn open<'k>(path: impl AsRef<Path>, key: impl Into<KeySource<'k>>) -> Result<Self, Error> {
         let path = path.as_ref();
         let derived = path.with_extension("derived.db");
-        Self::setup(Connection::open(path)?, key, Durability::File, &derived)
+        let mut store = Self::setup(
+            Connection::open(path)?,
+            key.into().check()?,
+            Durability::File,
+            &derived,
+        )?;
+        store.path = Some(path.to_owned());
+        Ok(store)
     }
 
     /// An in-memory database (tests, previews). `SQLCipher` does not encrypt
@@ -149,7 +164,7 @@ impl Store {
     pub fn open_in_memory(key: &DatabaseKey) -> Result<Self, Error> {
         Self::setup(
             Connection::open_in_memory()?,
-            key,
+            KeySource::Raw(key),
             Durability::Memory,
             Path::new(":memory:"),
         )
@@ -157,11 +172,11 @@ impl Store {
 
     fn setup(
         mut conn: Connection,
-        key: &DatabaseKey,
+        key: KeySource<'_>,
         durability: Durability,
         derived: &Path,
     ) -> Result<Self, Error> {
-        conn.execute_batch(&key.pragma())?;
+        key.apply(&conn)?;
         // Pin the format so a future SQLCipher major still opens these files.
         conn.execute_batch("PRAGMA cipher_compatibility = 4;")?;
         let tables: i64 = conn
@@ -186,7 +201,7 @@ impl Store {
         Self::recover_in_flight(&mut conn)?;
         Self::init_sync_state(&conn)?;
         derived::attach(&conn, derived, key)?;
-        Ok(Self { conn })
+        Ok(Self { conn, path: None })
     }
 
     fn init_sync_state(conn: &Connection) -> Result<(), Error> {

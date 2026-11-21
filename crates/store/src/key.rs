@@ -69,3 +69,62 @@ impl fmt::Debug for DatabaseKey {
         f.write_str("DatabaseKey(<redacted>)")
     }
 }
+
+/// Shortest accepted passphrase (database fallback without a credential
+/// store, `.myos` exports).
+pub const MIN_PASSPHRASE_CHARS: usize = 8;
+
+/// How a database file is unlocked.
+#[derive(Clone, Copy)]
+pub enum KeySource<'a> {
+    /// A random key from the credential store, used raw.
+    Raw(&'a DatabaseKey),
+    /// A passphrase, stretched by `SQLCipher`'s KDF with the file's own salt
+    /// (when no credential store exists, and for exports).
+    Passphrase(&'a str),
+}
+
+impl<'a> From<&'a DatabaseKey> for KeySource<'a> {
+    fn from(key: &'a DatabaseKey) -> Self {
+        Self::Raw(key)
+    }
+}
+
+// Manual impl: neither form may reach a log.
+impl fmt::Debug for KeySource<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Raw(_) => f.write_str("KeySource::Raw(<redacted>)"),
+            Self::Passphrase(_) => f.write_str("KeySource::Passphrase(<redacted>)"),
+        }
+    }
+}
+
+impl KeySource<'_> {
+    /// Reject passphrases that are too short.
+    pub(crate) fn check(self) -> Result<Self, Error> {
+        match self {
+            Self::Passphrase(passphrase) if passphrase.chars().count() < MIN_PASSPHRASE_CHARS => {
+                Err(Error::OutOfRange("passphrase"))
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// Value bound as `KEY ?` of an `ATTACH` (the raw form is `SQLCipher`'s
+    /// `x'…'` literal), wiped on drop.
+    pub(crate) fn attach_value(self) -> Zeroizing<String> {
+        match self {
+            Self::Raw(key) => key.raw_literal(),
+            Self::Passphrase(passphrase) => Zeroizing::new(passphrase.to_owned()),
+        }
+    }
+
+    /// Unlock the main database of `conn`.
+    pub(crate) fn apply(self, conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+        match self {
+            Self::Raw(key) => conn.execute_batch(&key.pragma()),
+            Self::Passphrase(passphrase) => conn.pragma_update(None, "key", passphrase),
+        }
+    }
+}

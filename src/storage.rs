@@ -128,3 +128,31 @@ fn remove_database(dir: &Path) -> Result<(), StorageError> {
     log::warn!("database key lost: started a new database");
     Ok(())
 }
+
+/// Open the database with a passphrase, for systems without a credential
+/// store ([`VaultError::Unavailable`] from [`open`]): the UI asks for it.
+pub fn open_with_passphrase(passphrase: &str) -> Result<Opened, StorageError> {
+    let dir = database_dir();
+    std::fs::create_dir_all(&dir).map_err(|source| StorageError::Directory {
+        path: dir.clone(),
+        source,
+    })?;
+    let store = Store::open(
+        dir.join(DATABASE_FILE),
+        myos_store::KeySource::Passphrase(passphrase),
+    )?;
+    Ok(Opened { store, reset: None })
+}
+
+/// Log out: delete the database files and the stored key. Data that was not
+/// synced or exported is gone.
+pub fn logout(store: Store) -> Result<(), StorageError> {
+    store.wipe()?;
+    match Vault::open(APP_ID) {
+        Ok(vault) => vault.forget()?,
+        // Passphrase-unlocked database: no stored key to drop.
+        Err(VaultError::Unavailable(_)) => {}
+        Err(other) => return Err(other.into()),
+    }
+    Ok(())
+}

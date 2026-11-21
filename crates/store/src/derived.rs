@@ -23,7 +23,7 @@ use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 use uuid::Uuid;
 
 use crate::convert::{day_from_number, day_number};
-use crate::{DatabaseKey, Error, Store};
+use crate::{Error, KeySource, Store};
 
 /// Bump when the cache layout changes: the cache is then rebuilt.
 const SCHEMA: i64 = 1;
@@ -85,7 +85,7 @@ pub struct RefreshStats {
 }
 
 /// Attach (creating or rebuilding) the derived cache.
-pub(crate) fn attach(conn: &Connection, path: &Path, key: &DatabaseKey) -> Result<(), Error> {
+pub(crate) fn attach(conn: &Connection, path: &Path, key: KeySource<'_>) -> Result<(), Error> {
     let location = path.to_str().ok_or(Error::OutOfRange("derived path"))?;
     if attach_once(conn, location, key)? {
         return Ok(());
@@ -109,13 +109,13 @@ pub(crate) fn attach(conn: &Connection, path: &Path, key: &DatabaseKey) -> Resul
 
 /// Attach and prepare the schema; `false` when the file cannot be read with
 /// `key`.
-fn attach_once(conn: &Connection, location: &str, key: &DatabaseKey) -> Result<bool, Error> {
-    // The key literal is hex only; the path is bound as a parameter.
-    let sql = zeroize::Zeroizing::new(format!(
-        "ATTACH DATABASE ?1 AS derived KEY \"{}\"",
-        key.raw_literal().as_str()
-    ));
-    match conn.execute(&sql, [location]) {
+fn attach_once(conn: &Connection, location: &str, key: KeySource<'_>) -> Result<bool, Error> {
+    // Path and key are bound: no key text in the SQL statement.
+    let secret = key.attach_value();
+    match conn.execute(
+        "ATTACH DATABASE ?1 AS derived KEY ?2",
+        [location, secret.as_str()],
+    ) {
         Ok(_) => {}
         // Garbage in the file can fail the attach itself.
         Err(err) if err.sqlite_error_code() == Some(ErrorCode::NotADatabase) => return Ok(false),
