@@ -4,15 +4,20 @@
 //! write and the operation that produced it. Payload tag [`TAG_DELETED_AT`]
 //! marks a tombstone.
 //!
-//! - **Deletes win**: a live version never replaces a tombstone unless it is
-//!   an explicit restore newer than the tombstone; a tombstone replaces a live
-//!   version unless that version is a restore newer than the tombstone.
-//! - **Rows without field clocks** (no tag [`TAG_FIELD_CLOCKS`]): the greater
-//!   `(hlc, node)` wins whole.
-//! - **Rows with field clocks**, both live: every tag is decided on its own by
-//!   its field clock (missing entry = the row's clock), so concurrent edits of
-//!   different fields both survive. Tags the reader does not know merge too.
+//! - **Rows with field clocks** (tag [`TAG_FIELD_CLOCKS`]): every tag,
+//!   `deleted_at` included, is a last-writer-wins register decided by its own
+//!   clock, ties broken by the value bytes. Concurrent edits of different
+//!   fields both survive; a delete stays until a restore clears `deleted_at`
+//!   with a newer clock, so a stale tombstone never re-deletes a restored
+//!   row. Tags the reader does not know merge too.
+//! - **Rows without field clocks**: the greater `(hlc, node)` wins whole
+//!   (ties: greater payload bytes), except that deletes win unless restored:
+//!   a live version replaces a tombstone only as a newer explicit restore,
+//!   and a tombstone replaces a live version unless that version is a newer
+//!   restore. A restored row keeps its restore mark through later upserts
+//!   ([`op_after`]).
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::protocol::op;
@@ -34,7 +39,8 @@ pub struct FieldClock {
     /// Writer node.
     pub node: i64,
     /// Hash of the value written ([`value_hash`]); lets the writer tell
-    /// which fields changed since.
+    /// which fields changed since. A clock read without one counts as 0, so
+    /// the next write restamps that field.
     pub hash: u64,
 }
 
@@ -44,8 +50,8 @@ impl FieldClock {
     }
 }
 
-/// FNV-1a 64 of a field value (absent = hash of nothing, distinct from
-/// every present value by a leading presence byte). Stable across platforms.
+/// FNV-1a 64 of a field value; absent and empty values hash differently.
+/// Stable across platforms.
 #[must_use]
 pub fn value_hash(value: Option<&[u8]>) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -102,19 +108,24 @@ pub fn write_clocks(clocks: &BTreeMap<u16, FieldClock>) -> Tlv {
     record
 }
 
-/// Field clocks after a local write at `(hlc, node)`: fields whose value
+/// Field clocks after a local write at `(hlc, node)`.
+///
+/// Fields whose value
 /// hash changed (or that have no clock yet) get the new clock, the others
-/// keep theirs. `previous` are the clocks stored with the row.
+/// keep theirs. `known` lists the tags the writer's schema defines, so absent
+/// fields get a clock too (a cleared field then beats a stale value).
 #[must_use]
 pub fn restamp(
     payload: &Tlv,
     previous: &BTreeMap<u16, FieldClock>,
     hlc: u64,
     node: i64,
+    known: &[u16],
 ) -> BTreeMap<u16, FieldClock> {
     let tags: BTreeSet<u16> = payload
         .tags()
         .chain(previous.keys().copied())
+        .chain(known.iter().copied())
         .filter(|tag| *tag != TAG_FIELD_CLOCKS)
         .collect();
     tags.into_iter()
@@ -163,16 +174,24 @@ pub enum Outcome {
     Merged {
         /// Merged payload (with merged field clocks).
         payload: Tlv,
-        /// Greatest field clock.
+        /// Clock of the merged row (never older than either input).
         hlc: u64,
         /// Its node.
         node: i64,
     },
 }
 
+/// Order of two versions by clock, then payload bytes (deterministic ties).
+fn version_order(stored: &Version<'_>, incoming: &Version<'_>) -> Ordering {
+    incoming
+        .key()
+        .cmp(&stored.key())
+        .then_with(|| incoming.payload.encode().cmp(&stored.payload.encode()))
+}
+
 /// Whole-row decision, deletes winning unless explicitly restored.
 fn row_winner(stored: &Version<'_>, incoming: &Version<'_>) -> Outcome {
-    let newer = incoming.key() > stored.key();
+    let newer = version_order(stored, incoming) == Ordering::Greater;
     let incoming_wins = match (stored.deleted(), incoming.deleted()) {
         (false, true) => stored.op != op::RESTORE || newer,
         (true, false) => incoming.op == op::RESTORE && newer,
@@ -185,13 +204,25 @@ fn row_winner(stored: &Version<'_>, incoming: &Version<'_>) -> Outcome {
     }
 }
 
-/// Decide between the stored and an incoming version of the same row.
-/// Ties keep the stored version, so applying a version twice changes
-/// nothing.
+/// Operation to store with the winner of a row-level decision: a restored
+/// row keeps its restore mark when a later live upsert replaces it, so a
+/// tombstone older than the restore still loses.
+#[must_use]
+pub fn op_after(stored: &Version<'_>, incoming: &Version<'_>) -> u16 {
+    if incoming.op == op::UPSERT && stored.op == op::RESTORE && !incoming.deleted() {
+        op::RESTORE
+    } else {
+        incoming.op
+    }
+}
+
+/// Decide between the stored and an incoming version of the same row. The
+/// result is the same whichever side is "stored" (only the outcome label
+/// differs), and applying a version twice changes nothing.
 pub fn resolve(stored: &Version<'_>, incoming: &Version<'_>) -> Result<Outcome, TlvError> {
     let per_field =
         stored.payload.contains(TAG_FIELD_CLOCKS) || incoming.payload.contains(TAG_FIELD_CLOCKS);
-    if !per_field || stored.deleted() || incoming.deleted() {
+    if !per_field {
         return Ok(row_winner(stored, incoming));
     }
     let stored_clocks = read_clocks(stored.payload)?;
@@ -224,34 +255,44 @@ pub fn resolve(stored: &Version<'_>, incoming: &Version<'_>) -> Result<Outcome, 
 
     let mut merged = Tlv::default();
     let mut clocks = BTreeMap::new();
-    let (mut from_stored, mut from_incoming) = (true, true);
+    let (mut incoming_won, mut stored_won) = (false, false);
     for tag in tags {
         let mine = clock_of(&stored_clocks, stored, tag);
         let theirs = clock_of(&incoming_clocks, incoming, tag);
-        let (winner, clock) = if theirs.key() > mine.key() {
-            from_stored = false;
-            (incoming.payload, theirs)
-        } else {
-            from_incoming &= mine.key() == theirs.key()
-                && stored.payload.bytes(tag) == incoming.payload.bytes(tag);
-            (stored.payload, mine)
+        let mine_value = stored.payload.bytes(tag);
+        let theirs_value = incoming.payload.bytes(tag);
+        let order = theirs
+            .key()
+            .cmp(&mine.key())
+            .then_with(|| theirs_value.cmp(&mine_value));
+        let (value, clock) = match order {
+            Ordering::Greater => {
+                incoming_won = true;
+                (theirs_value, theirs)
+            }
+            Ordering::Less => {
+                stored_won = true;
+                (mine_value, mine)
+            }
+            Ordering::Equal => (mine_value, mine),
         };
-        if let Some(value) = winner.bytes(tag) {
+        if let Some(value) = value {
             merged.put_bytes(tag, value);
         }
         clocks.insert(tag, clock);
     }
-    if from_stored {
+    if !incoming_won {
         return Ok(Outcome::KeepStored);
     }
-    if from_incoming {
+    if !stored_won {
         return Ok(Outcome::TakeIncoming);
     }
     let (hlc, node) = clocks
         .values()
         .map(|clock| clock.key())
+        .chain([stored.key(), incoming.key()])
         .max()
-        .unwrap_or((incoming.hlc, incoming.node));
+        .unwrap_or_else(|| incoming.key());
     merged.put_record(TAG_FIELD_CLOCKS, &write_clocks(&clocks));
     Ok(Outcome::Merged {
         payload: merged,
@@ -264,28 +305,36 @@ pub fn resolve(stored: &Version<'_>, incoming: &Version<'_>) -> Result<Outcome, 
 mod tests {
     use super::*;
 
+    const KNOWN: &[u16] = &[TAG_DELETED_AT, 10, 11, 12];
+
     /// A row with fields `tag → value` all written at `(hlc, node)`.
     fn row(fields: &[(u16, u64)], hlc: u64, node: i64) -> Tlv {
         let mut payload = Tlv::default();
         for (tag, value) in fields {
             payload.put_uint(*tag, *value);
         }
-        let clocks = restamp(&payload, &BTreeMap::new(), hlc, node);
+        let clocks = restamp(&payload, &BTreeMap::new(), hlc, node, KNOWN);
         payload.put_record(TAG_FIELD_CLOCKS, &write_clocks(&clocks));
         payload
     }
 
-    /// Edit `tag` of `payload` locally at `(hlc, node)`.
-    fn edit(payload: &Tlv, tag: u16, value: u64, hlc: u64, node: i64) -> Tlv {
+    /// Rewrite `payload` locally at `(hlc, node)` with `change` applied.
+    fn local(payload: &Tlv, hlc: u64, node: i64, change: impl FnOnce(&mut Tlv)) -> Tlv {
         let previous = read_clocks(payload).unwrap_or_default();
         let mut next = payload.clone();
-        next.put_uint(tag, value);
-        let clocks = restamp(&next, &previous, hlc, node);
+        change(&mut next);
+        let clocks = restamp(&next, &previous, hlc, node, KNOWN);
         next.put_record(TAG_FIELD_CLOCKS, &write_clocks(&clocks));
         next
     }
 
-    fn version(payload: &Tlv, op: u16) -> Version<'_> {
+    fn edit(payload: &Tlv, tag: u16, value: u64, hlc: u64, node: i64) -> Tlv {
+        local(payload, hlc, node, |next| {
+            next.put_uint(tag, value);
+        })
+    }
+
+    fn version(payload: &Tlv) -> Version<'_> {
         let clocks = read_clocks(payload).unwrap_or_default();
         let (hlc, node) = clocks
             .values()
@@ -293,7 +342,7 @@ mod tests {
             .max()
             .unwrap_or((0, 0));
         Version {
-            op,
+            op: op::UPSERT,
             hlc,
             node,
             payload,
@@ -302,7 +351,7 @@ mod tests {
 
     /// Apply `incoming` onto `stored` and return the resulting payload.
     fn apply(stored: &Tlv, incoming: &Tlv) -> Tlv {
-        match resolve(&version(stored, op::UPSERT), &version(incoming, op::UPSERT)) {
+        match resolve(&version(stored), &version(incoming)) {
             Ok(Outcome::KeepStored) => stored.clone(),
             Ok(Outcome::TakeIncoming) => incoming.clone(),
             Ok(Outcome::Merged { payload, .. }) => payload,
@@ -325,7 +374,6 @@ mod tests {
         let tablet = edit(&base, 11, 3, 300, 2);
         let on_server = apply(&apply(&base, &phone), &tablet);
         assert_eq!(values(&on_server), vec![(10, Some(2)), (11, Some(3))]);
-        // Same result in the other order, and applying twice changes nothing.
         let other_order = apply(&apply(&base, &tablet), &phone);
         assert_eq!(values(&other_order), values(&on_server));
         assert_eq!(values(&apply(&on_server, &phone)), values(&on_server));
@@ -339,6 +387,29 @@ mod tests {
         let late = edit(&base, 10, 7, 300, 1);
         assert_eq!(values(&apply(&early, &late)), vec![(10, Some(7))]);
         assert_eq!(values(&apply(&late, &early)), vec![(10, Some(7))]);
+    }
+
+    #[test]
+    fn equal_clocks_with_different_values_pick_the_same_value_on_both_sides() {
+        let mut a = Tlv::default();
+        a.put_uint(10, 1);
+        let mut b = Tlv::default();
+        b.put_uint(10, 2);
+        let clocks = |payload: &Tlv| {
+            let mut map = BTreeMap::new();
+            map.insert(
+                10,
+                FieldClock {
+                    hlc: 5,
+                    node: 1,
+                    hash: value_hash(payload.bytes(10)),
+                },
+            );
+            write_clocks(&map)
+        };
+        a.put_record(TAG_FIELD_CLOCKS, &clocks(&a));
+        b.put_record(TAG_FIELD_CLOCKS, &clocks(&b));
+        assert_eq!(values(&apply(&a, &b)), values(&apply(&b, &a)));
     }
 
     #[test]
@@ -383,87 +454,108 @@ mod tests {
     }
 
     #[test]
-    fn deletes_win_unless_restored() {
-        let live = row(&[(10, 1)], 100, 1);
-        let mut tombstone = row(&[(10, 1)], 50, 2);
+    fn a_restore_survives_a_stale_tombstone_in_any_order() {
+        let base = row(&[(10, 1)], 100, 1);
+        let deleted = local(&base, 200, 1, |next| {
+            next.put_uint(TAG_DELETED_AT, 1);
+        });
+        let restored = local(&deleted, 300, 2, |next| {
+            next.remove(TAG_DELETED_AT);
+        });
+        let edited = edit(&restored, 10, 9, 400, 2);
+        // The stale tombstone arrives last, or first.
+        let late = apply(&apply(&base, &edited), &deleted);
+        let early = apply(&apply(&base, &deleted), &edited);
+        assert!(!late.contains(TAG_DELETED_AT));
+        assert_eq!(values(&late), values(&early));
+        assert_eq!(late.uint(10), Ok(Some(9)));
+    }
+
+    #[test]
+    fn a_delete_beats_a_concurrent_field_edit() {
+        let base = row(&[(10, 1)], 100, 1);
+        let deleted = local(&base, 200, 1, |next| {
+            next.put_uint(TAG_DELETED_AT, 1);
+        });
+        let edited = edit(&base, 10, 5, 300, 2);
+        assert!(apply(&deleted, &edited).contains(TAG_DELETED_AT));
+        assert!(apply(&edited, &deleted).contains(TAG_DELETED_AT));
+    }
+
+    #[test]
+    fn a_cleared_field_beats_an_older_value() {
+        let base = row(&[(10, 1), (11, 1)], 100, 1);
+        let cleared = local(&base, 200, 1, |next| {
+            next.remove(10);
+        });
+        let other = edit(&base, 11, 2, 300, 2);
+        let merged = apply(&other, &cleared);
+        assert_eq!(values(&merged), vec![(11, Some(2))]);
+        assert_eq!(values(&apply(&cleared, &other)), values(&merged));
+    }
+
+    #[test]
+    fn row_level_deletes_win_unless_restored() {
+        let mut live = Tlv::default();
+        live.put_uint(10, 1);
+        let mut tombstone = live.clone();
         tombstone.put_uint(TAG_DELETED_AT, 1);
-        let older_delete = version(&tombstone, op::DELETE);
+        let at = |payload, op, hlc| Version {
+            op,
+            hlc,
+            node: 1,
+            payload,
+        };
         assert_eq!(
-            resolve(&version(&live, op::UPSERT), &older_delete),
+            resolve(&at(&live, op::UPSERT, 100), &at(&tombstone, op::DELETE, 50)),
             Ok(Outcome::TakeIncoming)
         );
         assert_eq!(
-            resolve(&older_delete, &version(&live, op::UPSERT)),
+            resolve(&at(&tombstone, op::DELETE, 50), &at(&live, op::UPSERT, 100)),
             Ok(Outcome::KeepStored)
         );
         assert_eq!(
-            resolve(&older_delete, &version(&live, op::RESTORE)),
+            resolve(
+                &at(&tombstone, op::DELETE, 50),
+                &at(&live, op::RESTORE, 100)
+            ),
             Ok(Outcome::TakeIncoming)
+        );
+        // A restored row keeps its mark through an upsert and survives an
+        // older tombstone.
+        let restored = at(&live, op::RESTORE, 100);
+        let upsert = at(&live, op::UPSERT, 150);
+        let kept = op_after(&restored, &upsert);
+        assert_eq!(kept, op::RESTORE);
+        assert_eq!(
+            resolve(&at(&live, kept, 150), &at(&tombstone, op::DELETE, 50)),
+            Ok(Outcome::KeepStored)
         );
     }
 
     #[test]
-    fn rows_without_clocks_use_the_row_clock() {
+    fn row_level_ties_are_deterministic() {
         let mut a = Tlv::default();
         a.put_uint(10, 1);
         let mut b = Tlv::default();
         b.put_uint(10, 2);
-        let older = Version {
+        let at = |payload| Version {
             op: op::UPSERT,
-            hlc: 1,
+            hlc: 5,
             node: 1,
-            payload: &a,
+            payload,
         };
-        let newer = Version {
-            op: op::UPSERT,
-            hlc: 2,
-            node: 1,
-            payload: &b,
-        };
-        assert_eq!(resolve(&older, &newer), Ok(Outcome::TakeIncoming));
-        assert_eq!(resolve(&newer, &older), Ok(Outcome::KeepStored));
-        assert_eq!(resolve(&newer, &newer), Ok(Outcome::KeepStored));
+        let one = resolve(&at(&a), &at(&b));
+        let two = resolve(&at(&b), &at(&a));
+        assert_ne!(one, two, "exactly one side wins");
+        assert_eq!(resolve(&at(&a), &at(&a)), Ok(Outcome::KeepStored));
     }
-}
-
-#[cfg(test)]
-mod never_written {
-    use super::*;
 
     #[test]
-    fn a_field_never_written_loses_to_a_real_write() {
-        // Both start without tag 11; one side sets it, the other edits tag 10
-        // later (higher row clock).
-        let mut base = Tlv::default();
-        base.put_uint(10, 1);
-        let base_clocks = restamp(&base, &BTreeMap::new(), 100, 1);
-
-        let mut phone = base.clone();
-        phone.put_uint(11, 175);
-        let phone_clocks = restamp(&phone, &base_clocks, 200, 1);
-        phone.put_record(TAG_FIELD_CLOCKS, &write_clocks(&phone_clocks));
-
-        let mut tablet = base;
-        tablet.put_uint(10, 2);
-        let tablet_clocks = restamp(&tablet, &base_clocks, 300, 2);
-        tablet.put_record(TAG_FIELD_CLOCKS, &write_clocks(&tablet_clocks));
-
-        let stored = Version {
-            op: op::UPSERT,
-            hlc: 200,
-            node: 1,
-            payload: &phone,
-        };
-        let incoming = Version {
-            op: op::UPSERT,
-            hlc: 300,
-            node: 2,
-            payload: &tablet,
-        };
-        let Ok(Outcome::Merged { payload, .. }) = resolve(&stored, &incoming) else {
-            panic!("expected a merge");
-        };
-        assert_eq!(payload.uint(10), Ok(Some(2)));
-        assert_eq!(payload.uint(11), Ok(Some(175)));
+    fn absent_and_empty_values_hash_differently() {
+        assert_ne!(value_hash(None), value_hash(Some(&[])));
+        let base = row(&[(10, 1)], 100, 1);
+        let back = edit(&edit(&base, 10, 2, 200, 1), 10, 1, 300, 1);
+        assert_eq!(read_clocks(&back).unwrap_or_default()[&10].hlc, 300);
     }
 }

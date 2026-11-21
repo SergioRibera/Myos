@@ -213,7 +213,13 @@ fn restamp_fields(
         return Ok(());
     };
     let previous = myos_sync_wire::merge::read_clocks(&record)?;
-    let clocks = myos_sync_wire::merge::restamp(&record, &previous, stamp.hlc.get(), stamp.node);
+    // Every column of the table gets a clock, absent ones too: a cleared
+    // field must beat an older value from another device.
+    let known: Vec<u16> = std::iter::once(crate::spec::TAG_DELETED_AT)
+        .chain((0..spec.columns.len()).map(crate::spec::TableSpec::tag))
+        .collect();
+    let clocks =
+        myos_sync_wire::merge::restamp(&record, &previous, stamp.hlc.get(), stamp.node, &known);
     tx.execute(
         &format!("UPDATE {} SET field_hlc = ?2 WHERE id = ?1", spec.table),
         (

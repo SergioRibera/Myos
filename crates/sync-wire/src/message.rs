@@ -3,7 +3,7 @@
 //! - `PushBatch`: 1 device id, 2 proto, 3 ops list; op: 1 op id, 2 entity,
 //!   3 row id, 4 op, 5 hlc, 6 node, 7 payload version, 8 payload.
 //! - `PushResponse`: 1 outcomes list; outcome: 1 op id, 2 kind (1 applied,
-//!   2 superseded, 3 rejected), 3 revision, 4 code; 2 server time, 3 min proto.
+//!   2 superseded, 3 rejected, 4 merged), 3 revision, 4 code; 2 server time, 3 min proto.
 //! - `PullPage`: 1 rows list; row: 1 entity, 2 row id, 3 op, 4 hlc, 5 node,
 //!   6 revision, 7 payload version, 8 payload; 2 next, 3 more, 4 server time,
 //!   5 min proto.
@@ -145,6 +145,9 @@ impl PushResponse {
                     PushResult::Rejected { code } => {
                         item.put_uint(2, 3).put_uint(4, u64::from(code));
                     }
+                    PushResult::Merged { server_rev } => {
+                        item.put_uint(2, 4).put_int(3, server_rev);
+                    }
                 }
                 item
             }),
@@ -170,6 +173,9 @@ impl PushResponse {
                     },
                     3 => PushResult::Rejected {
                         code: narrow(item, 4)?,
+                    },
+                    4 => PushResult::Merged {
+                        server_rev: required(item.int(3)?, 3)?,
                     },
                     _ => return Err(TlvError::Malformed { tag: 2 }),
                 };
@@ -278,6 +284,10 @@ mod tests {
                 PushOutcome {
                     op_id: Uuid::from_u128(32),
                     result: PushResult::Rejected { code: 2 },
+                },
+                PushOutcome {
+                    op_id: Uuid::from_u128(33),
+                    result: PushResult::Merged { server_rev: 8 },
                 },
             ],
             server_time_ms: 1_795_000_000_000,

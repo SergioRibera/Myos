@@ -76,20 +76,38 @@ impl Server {
                 },
             )
             .unwrap();
-            (outcome, stored.rev)
+            let op_code = merge::op_after(
+                &Version {
+                    op: stored.op,
+                    hlc: stored.hlc,
+                    node: stored.node,
+                    payload: &stored_payload,
+                },
+                &Version {
+                    op: op.op,
+                    hlc: op.hlc,
+                    node: op.node,
+                    payload: &incoming_payload,
+                },
+            );
+            (outcome, stored.rev, op_code)
         });
-        let (op_code, hlc, node, payload) = match decided {
-            Some((Outcome::KeepStored, rev)) => {
+        let (op_code, hlc, node, payload, merged) = match decided {
+            Some((Outcome::KeepStored, rev, _)) => {
                 let result = PushResult::Superseded { server_rev: rev };
                 self.receipts.insert(op.op_id, result);
                 return result;
             }
-            None | Some((Outcome::TakeIncoming, _)) => (op.op, op.hlc, op.node, op.payload.clone()),
-            Some((Outcome::Merged { payload, hlc, node }, _)) => (
+            None => (op.op, op.hlc, op.node, op.payload.clone(), false),
+            Some((Outcome::TakeIncoming, _, op_code)) => {
+                (op_code, op.hlc, op.node, op.payload.clone(), false)
+            }
+            Some((Outcome::Merged { payload, hlc, node }, _, _)) => (
                 myos_sync_wire::protocol::op::UPSERT,
                 hlc,
                 node,
                 payload.encode(),
+                true,
             ),
         };
         self.rev += 1;
@@ -104,8 +122,14 @@ impl Server {
                 payload,
             },
         );
-        let result = PushResult::Applied {
-            server_rev: self.rev,
+        let result = if merged {
+            PushResult::Merged {
+                server_rev: self.rev,
+            }
+        } else {
+            PushResult::Applied {
+                server_rev: self.rev,
+            }
         };
         self.receipts.insert(op.op_id, result);
         result

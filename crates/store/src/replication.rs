@@ -374,11 +374,25 @@ impl Store {
             };
             let op_id = op.op_id.as_bytes().as_slice();
             match outcome.result {
-                // The server may have merged the op with fields from other
-                // devices, so the revision is not recorded here: the stored
-                // version comes back by pull and is recorded (or applied)
-                // then.
-                PushResult::Applied { .. } => {
+                // Stored as sent: the revision is ours, so an older feed
+                // entry never reverts the row.
+                PushResult::Applied { server_rev } => {
+                    tx.execute("DELETE FROM sync_outbox WHERE op_id = ?1", [op_id])?;
+                    if let Some(spec) = Entity::from_code(op.entity).and_then(spec::of) {
+                        tx.execute(
+                            &format!(
+                                "UPDATE {} SET server_rev = ?2 WHERE id = ?1
+                                 AND (server_rev IS NULL OR server_rev < ?2)",
+                                spec.table
+                            ),
+                            params![op.row_id.as_bytes().as_slice(), server_rev],
+                        )?;
+                    }
+                    report.pushed += 1;
+                }
+                // Merged with fields of other devices: the stored version
+                // differs from ours and comes back by pull.
+                PushResult::Merged { .. } => {
                     tx.execute("DELETE FROM sync_outbox WHERE op_id = ?1", [op_id])?;
                     report.pushed += 1;
                 }
@@ -615,12 +629,11 @@ fn apply_remote(
                 .map_err(|_| ApplyError::Quarantine(UNDECODABLE))?
             {
                 Outcome::KeepStored => return Ok(false),
-                Outcome::TakeIncoming => {}
                 Outcome::Merged {
                     payload: merged,
                     hlc: merged_hlc,
                     node: merged_node,
-                } => {
+                } if !same_values(&merged, &remote_record) => {
                     decoded =
                         payload::decode(&merged.encode(), spec, &columns, member_columns.as_ref())?;
                     hlc = i64::try_from(merged_hlc)
@@ -628,6 +641,9 @@ fn apply_remote(
                     node = merged_node;
                     keep_outbox = true;
                 }
+                // A merge with the same values (other clocks) leaves nothing
+                // of ours to push.
+                Outcome::TakeIncoming | Outcome::Merged { .. } => {}
             }
         }
         // Without an unpushed change the server version is the truth.
@@ -646,21 +662,51 @@ fn apply_remote(
             local_seq: *local_seq,
         },
     )?;
-    if keep_outbox {
-        // The merge kept local fields the server lacks: push the merged row.
-        conn.execute(
-            "UPDATE sync_outbox SET hlc = ?3 WHERE entity = ?1 AND row_id = ?2 AND state < 2",
-            params![row.entity, row.row_id.as_bytes().as_slice(), hlc],
-        )?;
-    } else {
-        // The remote version wins: unpushed local changes of the row are moot.
-        conn.execute(
-            "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state < 2",
-            params![row.entity, row.row_id.as_bytes().as_slice()],
-        )?;
-    }
+    settle_outbox(conn, row, keep_outbox.then_some(hlc))?;
     after_apply(conn, spec, row, &decoded, local.and_then(|local| local.day))?;
     Ok(true)
+}
+
+/// Outbox of a row after a remote version was written. `merged_hlc`: the
+/// merge kept local fields the server lacks, so the merged row is pushed as
+/// a new op (the queued one may already hold a receipt for the older
+/// payload) and its clock never goes back. `None`: the remote version won and
+/// unpushed local changes of the row are moot.
+fn settle_outbox(
+    conn: &Connection,
+    row: &RemoteRow,
+    merged_hlc: Option<i64>,
+) -> Result<(), rusqlite::Error> {
+    let row_id = row.row_id.as_bytes().as_slice();
+    match merged_hlc {
+        Some(hlc) => conn.execute(
+            "UPDATE sync_outbox SET hlc = max(hlc, ?3),
+               op_id = CASE WHEN seq = (SELECT max(seq) FROM sync_outbox
+                 WHERE entity = ?1 AND row_id = ?2 AND state < 2) THEN ?4 ELSE op_id END
+             WHERE entity = ?1 AND row_id = ?2 AND state < 2",
+            params![
+                row.entity,
+                row_id,
+                hlc,
+                Uuid::now_v7().as_bytes().as_slice()
+            ],
+        )?,
+        None => conn.execute(
+            "DELETE FROM sync_outbox WHERE entity = ?1 AND row_id = ?2 AND state < 2",
+            params![row.entity, row_id],
+        )?,
+    };
+    Ok(())
+}
+
+/// Whether two payloads carry the same values (field clocks aside).
+fn same_values(a: &Tlv, b: &Tlv) -> bool {
+    let values = |payload: &Tlv| {
+        let mut values = payload.clone();
+        values.remove(spec::TAG_FIELD_HLC);
+        values
+    };
+    values(a) == values(b)
 }
 
 /// Bookkeeping after a remote row was written: quarantine, derived-data

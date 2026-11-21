@@ -59,6 +59,12 @@ pub enum PushResult {
         /// Revision assigned.
         server_rev: i64,
     },
+    /// Stored after merging with fields of other devices: the stored
+    /// version differs from the op and arrives by pull.
+    Merged {
+        /// Revision assigned.
+        server_rev: i64,
+    },
     /// The server holds a version that wins; it arrives by pull.
     Superseded {
         /// Revision of the winning version.

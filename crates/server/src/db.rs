@@ -39,6 +39,7 @@ pub mod reject {
 const APPLIED: i16 = 1;
 const SUPERSEDED: i16 = 2;
 const REJECTED: i16 = 3;
+const MERGED: i16 = 4;
 
 /// Database failure.
 #[derive(Debug, thiserror::Error)]
@@ -245,6 +246,9 @@ async fn receipt(
         SUPERSEDED => PushResult::Superseded {
             server_rev: rev.ok_or(DbError::Corrupt)?,
         },
+        MERGED => PushResult::Merged {
+            server_rev: rev.ok_or(DbError::Corrupt)?,
+        },
         _ => PushResult::Rejected {
             code: code
                 .and_then(|code| u16::try_from(code).ok())
@@ -262,6 +266,7 @@ async fn store_receipt(
     let (outcome, rev, code) = match result {
         PushResult::Applied { server_rev } => (APPLIED, Some(server_rev), None),
         PushResult::Superseded { server_rev } => (SUPERSEDED, Some(server_rev), None),
+        PushResult::Merged { server_rev } => (MERGED, Some(server_rev), None),
         PushResult::Rejected { code } => (REJECTED, None, Some(i32::from(code))),
     };
     tx.execute(
@@ -303,8 +308,8 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
             &[&user, &entity, &push.row_id],
         )
         .await?;
-    let (op_code, hlc, node, payload) = match stored {
-        None => (push.op, hlc, push.node, push.payload.clone()),
+    let (op_code, hlc, node, payload, merged) = match stored {
+        None => (push.op, hlc, push.node, push.payload.clone(), false),
         Some(row) => {
             let stored_op: i16 = row.get(0);
             let stored_hlc: i64 = row.get(1);
@@ -312,28 +317,33 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
             let stored_bytes: Vec<u8> = row.get(4);
             let stored_payload =
                 Tlv::decode(&stored_bytes, PAYLOAD_LIMIT).map_err(|_| DbError::Corrupt)?;
-            let outcome = merge::resolve(
-                &Version {
-                    op: u16::try_from(stored_op).map_err(|_| DbError::Corrupt)?,
-                    hlc: u64::try_from(stored_hlc).map_err(|_| DbError::Corrupt)?,
-                    node: row.get(2),
-                    payload: &stored_payload,
-                },
-                &Version {
-                    op: push.op,
-                    hlc: push.hlc,
-                    node: push.node,
-                    payload: &incoming,
-                },
-            )
-            .map_err(|_| DbError::Corrupt)?;
+            let stored_version = Version {
+                op: u16::try_from(stored_op).map_err(|_| DbError::Corrupt)?,
+                hlc: u64::try_from(stored_hlc).map_err(|_| DbError::Corrupt)?,
+                node: row.get(2),
+                payload: &stored_payload,
+            };
+            let incoming_version = Version {
+                op: push.op,
+                hlc: push.hlc,
+                node: push.node,
+                payload: &incoming,
+            };
+            let outcome =
+                merge::resolve(&stored_version, &incoming_version).map_err(|_| DbError::Corrupt)?;
             match outcome {
                 Outcome::KeepStored => {
                     return Ok(PushResult::Superseded {
                         server_rev: stored_rev,
                     });
                 }
-                Outcome::TakeIncoming => (push.op, hlc, push.node, push.payload.clone()),
+                Outcome::TakeIncoming => (
+                    merge::op_after(&stored_version, &incoming_version),
+                    hlc,
+                    push.node,
+                    push.payload.clone(),
+                    false,
+                ),
                 Outcome::Merged {
                     payload,
                     hlc: merged_hlc,
@@ -343,6 +353,7 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
                     i64::try_from(merged_hlc).map_err(|_| DbError::Corrupt)?,
                     node,
                     payload.encode(),
+                    true,
                 ),
             }
         }
@@ -378,5 +389,9 @@ async fn apply(tx: &Transaction<'_>, user: Uuid, push: &PushOp) -> Result<PushRe
         ],
     )
     .await?;
-    Ok(PushResult::Applied { server_rev: rev })
+    Ok(if merged {
+        PushResult::Merged { server_rev: rev }
+    } else {
+        PushResult::Applied { server_rev: rev }
+    })
 }

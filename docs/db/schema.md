@@ -592,11 +592,16 @@ Where `crates/store` refines or departs from the sections above.
 - **Migrations stay editable until the first release.** Nothing ships yet, so
   `0001`/`0002` are amended in place; after release they are frozen and only
   appended to.
-- **Merge granularity.** v1 writes whole rows: every local write sets
-  `field_hlc = NULL` ("every field at the row hlc"), so all synced tables
-  merge per row. Per-field merge for header tables (`profile`, `preferences`,
-  `workout_session`, `meal`, `routine`) needs the sync payload tags and lands
-  with the sync protocol.
+- **Merge granularity.** Header tables (`profile`, `preferences`,
+  `workout_session`, `meal`, `routine`, `nutrition_plan`) merge per field:
+  every local write restamps `field_hlc` (tag → `(hlc, node, value hash)`)
+  for every column of the table, absent ones included, so a cleared field
+  beats an older value. Each tag, `deleted_at` included, is an LWW register
+  (ties broken by the value bytes): a restore clears `deleted_at` with a
+  newer clock and a stale tombstone cannot re-delete it. Other tables merge
+  whole rows; a restored row keeps `op = restore` through later upserts
+  (`merge::op_after`) so an older tombstone still loses. Rules live in
+  `crates/sync-wire` (`merge::resolve`), shared by devices and server.
 - **Outbox order.** A coalesced write moves its entry to the end of the queue
   (`seq INTEGER PRIMARY KEY AUTOINCREMENT`, never reused) with a fresh
   `op_id`; writers enqueue a parent after the children it references (meal
@@ -653,7 +658,13 @@ Where `crates/store` refines or departs from the sections above.
   - Pull: the server is the authority. A row without an unpushed local change
     is applied as is; with one, deletes win unless restored, otherwise the
     greater `(hlc, node)`; the winner drops the local outbox entry. A pulled
-    row equal to the local `(hlc, node)` only records `server_rev`.
+    row equal to the local one only records `server_rev`. A per-field merge
+    that keeps local values re-queues the merged row under a fresh `op_id`
+    (outbox hlc never goes back); one with the remote's values takes the
+    remote row.
+  - Push answers: `applied` records `server_rev` (the server stored the op
+    as sent); `merged` (stored after merging other devices' fields) and
+    `superseded` do not, the stored version arrives by pull.
   - Each pulled row is applied in a savepoint; unknown entity, undecodable
     payload or a failed constraint sends it to `sync_quarantine` (with op,
     hlc, node) and marks local changes of that row as failed "needs update";
@@ -682,6 +693,21 @@ Where `crates/store` refines or departs from the sections above.
   exclude the wrapped key (`sharedpref/keyring-default.xml`); iOS / macOS
   flag `database/` with `NSURLIsExcludedFromBackupKey` on every open
   (`crates/backup`).
+- **Sync server (`crates/server`).** axum + `tokio-postgres` / deadpool.
+  Opaque store: `sync_row(user_id, entity, row_id, op, hlc, node, rev,
+  payload_ver, payload)`, gap-free per-user `rev` from `user_rev` taken in
+  the push transaction, `push_receipt` per op id (purged after 30 days under
+  a delete-only `app.maintenance` policy). Row-level security forced on
+  every table, keyed by `app.user_id` set per transaction; the server role
+  is not a superuser. Ops with clocks > 60 s ahead, invalid TLV or payloads
+  > 1 MiB are rejected; ≤ 500 ops per push, ≤ 1000 rows per pull page.
+  Messages are TLV (`sync-wire::message`) over `POST /v1/push` and
+  `GET /v1/pull`; auth is a pluggable `Authenticator` (static
+  `MYOS_DEV_TOKENS` behind the `dev-auth` feature only). Client transport:
+  `crates/sync-http` (ureq + rustls with webpki roots). Typed projections
+  for the professional panel and analytics read from `sync_row` later.
+  `tests/e2e.rs` runs two devices against a throwaway cluster from the
+  devshell (`initdb` / `pg_ctl`).
 - **Windows build gap.** `openssl-src` builds MSVC targets with `nmake`, so
   the vendored OpenSSL behind SQLCipher cannot be cross-built from Linux;
   the Windows target needs a prebuilt or separately built static libcrypto
