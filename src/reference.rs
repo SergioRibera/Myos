@@ -166,6 +166,15 @@ impl Ready {
     }
 }
 
+/// Outcome of one update check.
+#[derive(Debug)]
+pub struct Checked {
+    /// Files ready to swap in.
+    pub ready: Vec<Ready>,
+    /// The check or a download failed: try again soon (downloads resume).
+    pub retry: bool,
+}
+
 /// Installed versions the updater compares against.
 #[derive(Debug, Clone, Default)]
 pub struct Installed {
@@ -187,7 +196,7 @@ fn newer(entry: Option<&Entry>, installed: Option<u32>) -> Option<&Entry> {
 /// Check the published manifest once and download what is newer than
 /// `installed`. Runs on a background thread; `None` when updates are off.
 #[must_use]
-pub fn check_for_updates(installed: &Installed) -> Option<Vec<Ready>> {
+pub fn check_for_updates(installed: &Installed) -> Option<Checked> {
     let Ok(key) = myos_catalog_update::verifying_key(PUBLIC_KEY) else {
         return None;
     };
@@ -196,7 +205,10 @@ pub fn check_for_updates(installed: &Installed) -> Option<Vec<Ready>> {
         Ok(manifest) => manifest,
         Err(err) => {
             log::warn!("catalog update check failed: {err}");
-            return Some(Vec::new());
+            return Some(Checked {
+                ready: Vec::new(),
+                retry: true,
+            });
         }
     };
     let dir = reference_dir();
@@ -220,6 +232,7 @@ pub fn check_for_updates(installed: &Installed) -> Option<Vec<Ready>> {
         ));
     }
     let mut ready = Vec::new();
+    let mut retry = false;
     for (reference, entry, current, country) in wanted {
         let next = current.with_extension("next.db");
         match source.download(&entry, &next) {
@@ -229,8 +242,12 @@ pub fn check_for_updates(installed: &Installed) -> Option<Vec<Ready>> {
                 current,
                 country,
             }),
-            Err(err) => log::warn!("download of {} failed: {err}", entry.file),
+            Err(err) => {
+                // What arrived is kept; the retry resumes from there.
+                log::warn!("download of {} failed: {err}", entry.file);
+                retry = true;
+            }
         }
     }
-    Some(ready)
+    Some(Checked { ready, retry })
 }

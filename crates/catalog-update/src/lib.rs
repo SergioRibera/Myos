@@ -280,10 +280,14 @@ impl Source {
     /// Files under `base` (an `https://` directory URL), signed by `key`.
     #[must_use]
     pub fn new(base: &str, key: VerifyingKey) -> Self {
+        Self::with_scheme(base, key, true)
+    }
+
+    fn with_scheme(base: &str, key: VerifyingKey, https_only: bool) -> Self {
         // Per-read timeout instead of a global one: a large file on a slow
         // link may take long as long as bytes keep coming.
         let config = ureq::Agent::config_builder()
-            .https_only(true)
+            .https_only(https_only)
             .timeout_connect(Some(Duration::from_secs(30)))
             .timeout_per_read(Some(Duration::from_secs(60)))
             .http_status_as_error(false)
@@ -319,15 +323,80 @@ impl Source {
         Manifest::verify(&text, &signature, &self.key)
     }
 
-    /// Download `entry` to `dest` (replaced atomically once size and hash
-    /// match; a partial or forged download never lands there).
+    /// Download `entry` to `dest`, replaced atomically once size and hash
+    /// match: a partial or forged download never lands there.
+    ///
+    /// Interrupted downloads resume: the bytes received so far stay in
+    /// `<dest>.download` (with `<dest>.download-sha256` naming the entry they belong
+    /// to) and the next call asks only for the rest (`Range`). The hash is
+    /// always taken over the whole file before it is accepted.
     pub fn download(&self, entry: &Entry, dest: &Path) -> Result<(), UpdateError> {
-        let body = self
-            .get(&entry.file)?
-            .into_with_config()
-            .limit(entry.size.min(FILE_LIMIT))
-            .reader();
-        install(body, entry, dest)
+        if entry.size > FILE_LIMIT {
+            return Err(UpdateError::Mismatch {
+                file: entry.file.clone(),
+            });
+        }
+        let partial = dest.with_extension("download");
+        let marker = dest.with_extension("download-sha256");
+        let expected = hex(&entry.sha256);
+        // A partial of another entry (older version) or longer than this
+        // one is useless.
+        let mut have = match std::fs::read_to_string(&marker) {
+            Ok(owner) if owner == expected => std::fs::metadata(&partial)
+                .map(|meta| meta.len())
+                .ok()
+                .filter(|len| *len <= entry.size)
+                .unwrap_or(0),
+            _ => 0,
+        };
+        if have == 0 {
+            std::fs::write(&marker, &expected)?;
+            std::fs::File::create(&partial)?;
+        }
+        if have < entry.size {
+            let url = format!("{}/{}", self.base, entry.file);
+            let mut request = self.agent.get(&url);
+            if have > 0 {
+                request = request.header("Range", format!("bytes={have}-"));
+            }
+            let response = request.call()?;
+            let resumed = response.status().as_u16() == 206
+                && response
+                    .headers()
+                    .get("content-range")
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|range| range.starts_with(&format!("bytes {have}-")));
+            let mut out = match response.status().as_u16() {
+                206 if resumed => std::fs::OpenOptions::new().append(true).open(&partial)?,
+                // The server ignored the range (or there was none): start over.
+                200 => {
+                    have = 0;
+                    std::fs::File::create(&partial)?
+                }
+                status => return Err(UpdateError::Status { status, url }),
+            };
+            let mut body = response
+                .into_body()
+                .into_with_config()
+                .limit(entry.size - have)
+                .reader();
+            let mut buffer = vec![0_u8; 64 * 1024];
+            loop {
+                // A dropped connection leaves what arrived for the next call.
+                let read = body.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                out.write_all(buffer.get(..read).unwrap_or_default())?;
+            }
+            out.sync_all()?;
+        }
+        let file = std::fs::File::open(&partial)?;
+        let result = install(file, entry, dest);
+        // Complete or not, these bytes are spent: a mismatch starts over.
+        let _removed = std::fs::remove_file(&partial);
+        let _removed = std::fs::remove_file(&marker);
+        result
     }
 }
 
@@ -465,5 +534,99 @@ mod tests {
         ] {
             assert!(Manifest::parse(text).is_err(), "{text:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use std::io::{BufRead, BufReader, Write as _};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    /// Serves `data` at `/f.db`: the first request is cut off halfway, later
+    /// ones honour `Range`. Records each request's `Range` header.
+    fn server(data: Vec<u8>) -> (String, Arc<Mutex<Vec<Option<String>>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for (index, stream) in listener.incoming().enumerate() {
+                let Ok(mut stream) = stream else { continue };
+                let mut range = None;
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        range = value.trim().trim_end_matches('-').parse::<usize>().ok();
+                    }
+                    line.clear();
+                }
+                log.lock()
+                    .expect("log")
+                    .push(range.map(|start| start.to_string()));
+                let start = range.unwrap_or(0);
+                let rest = &data[start..];
+                let head = if range.is_some() {
+                    format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{}\r\nConnection: close\r\n\r\n",
+                        rest.len(),
+                        data.len() - 1,
+                        data.len()
+                    )
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        rest.len()
+                    )
+                };
+                let _ = stream.write_all(head.as_bytes());
+                // First request: half the body, then the connection drops.
+                let body = if index == 0 {
+                    &rest[..rest.len() / 2]
+                } else {
+                    rest
+                };
+                let _ = stream.write_all(body);
+            }
+        });
+        (base, seen)
+    }
+
+    #[test]
+    fn interrupted_downloads_resume_where_they_stopped() -> Result<(), UpdateError> {
+        let data: Vec<u8> = (0..200_000_u32).map(|n| (n % 251) as u8).collect();
+        let entry = Entry {
+            kind: Kind::Catalog,
+            file: "f.db".into(),
+            schema: 1,
+            version: 1,
+            size: data.len() as u64,
+            sha256: Sha256::digest(&data).into(),
+        };
+        let (base, seen) = server(data.clone());
+        let key = verifying_key(&public_key(&"01".repeat(32))?)?;
+        let source = Source::with_scheme(&base, key, false);
+        let dir = std::env::temp_dir().join(format!("myos-resume-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let dest = dir.join("catalog.db");
+
+        assert!(source.download(&entry, &dest).is_err(), "cut off halfway");
+        assert!(!dest.exists());
+        let kept = std::fs::metadata(dest.with_extension("download"))?.len();
+        assert!(kept > 0 && kept < entry.size);
+
+        source.download(&entry, &dest)?;
+        assert_eq!(std::fs::read(&dest)?, data);
+        assert_eq!(
+            seen.lock().expect("log").clone(),
+            vec![None, Some(kept.to_string())],
+            "the second request asks only for the rest"
+        );
+        assert!(!dest.with_extension("download").exists());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 }

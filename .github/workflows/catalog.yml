@@ -25,16 +25,16 @@ on:
         description: "Food-facts countries (ISO 3166-1 alpha-2, comma separated)"
         type: string
         default: "bo,ar,cl,co,ec,mx,pe,py,uy,ve,es,us"
-  # Open Food Facts changes daily; a weekly refresh keeps barcodes current.
-  # Enable once the manual runs look right:
-  # schedule:
-  #   - cron: "0 5 * * 1"
-  # Rebuild when the pipeline or the catalog schema changes on main:
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - "tools/catalog-build/**"
-  #     - "crates/store/migrations/catalog/**"
+  # Open Food Facts changes daily: a weekly refresh keeps barcodes current.
+  schedule:
+    - cron: "0 5 * * 1"
+  # Rebuild when the pipeline, its translations or the catalog schema change.
+  push:
+    branches: [main]
+    paths:
+      - "tools/catalog-build/**"
+      - "crates/store/migrations/catalog/**"
+      - ".github/workflows/catalog.yml"
 
 permissions: {}
 
@@ -80,10 +80,12 @@ jobs:
           cargo run --release --locked -p catalog-build --
           catalog --out dist --version "$VERSION" --cache "$CACHE_DIR"
 
+      # Schedule and push have no inputs: rebuild everything for the default
+      # countries.
       - name: food facts
-        if: inputs.food_facts
+        if: github.event_name != 'workflow_dispatch' || inputs.food_facts
         env:
-          COUNTRIES: ${{ inputs.countries }}
+          COUNTRIES: ${{ inputs.countries || 'bo,ar,cl,co,ec,mx,pe,py,uy,ve,es,us' }}
           VERSION: ${{ steps.v.outputs.version }}
         run: >
           cargo run --release --locked -p catalog-build --
@@ -93,7 +95,7 @@ jobs:
       # Kept files are re-signed below, so they must match the previous
       # signed manifest first.
       - name: keep published food facts
-        if: ${{ !inputs.food_facts }}
+        if: github.event_name == 'workflow_dispatch' && !inputs.food_facts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

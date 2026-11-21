@@ -12,12 +12,14 @@ use istmo::Runtime;
 use myos_store::Store;
 use myos_store::catalog::{Catalog, ReferenceInfo};
 
-use crate::reference::{self, Installed, Ready};
+use crate::reference::{self, Checked, Installed, Ready};
 use crate::storage::{self, Opened, Reset, StorageError};
 use crate::sync::{Account, SyncState, Syncer};
 
 /// How often a long-running app looks for newer reference files.
 const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 3600);
+/// Retry delay after a failed check or an interrupted download.
+const RETRY_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 /// Application state shared by every shell.
 #[derive(Debug)]
@@ -27,10 +29,10 @@ pub struct App {
     reset: Option<Reset>,
     catalog: Option<ReferenceInfo>,
     food_facts: Option<(String, Option<ReferenceInfo>)>,
-    updates: Option<Receiver<Vec<Ready>>>,
+    updates: Option<Receiver<Checked>>,
     /// Inputs changed while a check ran: check again when it ends.
     recheck: bool,
-    last_check: Option<Instant>,
+    next_check: Option<Instant>,
     syncer: Option<Syncer>,
 }
 
@@ -62,7 +64,7 @@ impl App {
                 food_facts: None,
                 updates: None,
                 recheck: false,
-                last_check: None,
+                next_check: None,
                 syncer: None,
             },
             Err(err) => {
@@ -75,7 +77,7 @@ impl App {
                     food_facts: None,
                     updates: None,
                     recheck: false,
-                    last_check: None,
+                    next_check: None,
                     syncer: None,
                 };
             }
@@ -189,7 +191,7 @@ impl App {
             self.recheck = true;
             return;
         }
-        self.last_check = Some(Instant::now());
+        self.next_check = Some(Instant::now() + UPDATE_INTERVAL);
         let installed = Installed {
             catalog: self.catalog.map(|info| info.version),
             food_facts: self
@@ -215,19 +217,22 @@ impl App {
     /// from the UI loop; cheap when nothing is pending.
     pub fn poll(&mut self) {
         let Some(updates) = &self.updates else {
-            if self
-                .last_check
-                .is_some_and(|at| at.elapsed() >= UPDATE_INTERVAL)
-            {
+            if self.next_check.is_some_and(|at| Instant::now() >= at) {
                 self.check_for_updates();
             }
             return;
         };
-        let ready = match updates.try_recv() {
-            Ok(ready) => ready,
+        let Checked { ready, retry } = match updates.try_recv() {
+            Ok(checked) => checked,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Vec::new(),
+            Err(TryRecvError::Disconnected) => Checked {
+                ready: Vec::new(),
+                retry: false,
+            },
         };
+        if retry {
+            self.next_check = Some(Instant::now() + RETRY_INTERVAL);
+        }
         self.updates = None;
         if let Ok(store) = &mut self.store {
             Self::apply_ready(store, ready, &mut self.catalog, &mut self.food_facts);
