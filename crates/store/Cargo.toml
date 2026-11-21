@@ -27,8 +27,14 @@ zeroize = "1.9"
 [target.'cfg(target_vendor = "apple")'.dependencies]
 rusqlite = { version = "0.43", default-features = false, features = ["bundled-sqlcipher", "cache"] }
 
-[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+[target.'cfg(not(any(target_vendor = "apple", windows)))'.dependencies]
 rusqlite = { version = "0.43", default-features = false, features = ["bundled-sqlcipher-vendored-openssl", "cache"] }
+
+# `openssl-src` builds MSVC targets with nmake: Windows links a static
+# libcrypto built separately (nix/openssl-msvc.nix, `OPENSSL_LIB_DIR` /
+# `OPENSSL_INCLUDE_DIR`).
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.43", default-features = false, features = ["bundled-sqlcipher", "cache"] }
 
 [lints.rust]
 missing_docs = "warn"

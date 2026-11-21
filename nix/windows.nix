@@ -59,6 +59,9 @@ let
       "$@"
   '';
 
+  # SQLCipher's libcrypto (nix/openssl-msvc.nix).
+  openssl = import ./openssl-msvc.nix { inherit pkgs xwinSdk; };
+
   libDirs = [
     "${xwinSdk}/crt/lib/x86_64"
     "${xwinSdk}/sdk/lib/um/x86_64"
@@ -79,12 +82,24 @@ pkgs.stdenv.mkDerivation {
     "CARGO_TARGET_${targetEnv}_LINKER" = "${llvm.lld}/bin/lld-link";
     # Static CRT: the exe needs no VC++ redistributable.
     "CARGO_TARGET_${targetEnv}_RUSTFLAGS" = lib.concatStringsSep " " (
-      [ "-Ctarget-feature=+crt-static" ] ++ map (d: "-Lnative=${d}") libDirs
+      [ "-Ctarget-feature=+crt-static" ]
+      ++ map (d: "-Lnative=${d}") libDirs
+      # What the static libcrypto calls into.
+      ++ map (l: "-ldylib=${l}") [
+        "ws2_32"
+        "crypt32"
+        "advapi32"
+        "user32"
+        "bcrypt"
+      ]
     );
     "CC_${target}" = "${clangCl}/bin/clang-cl";
     "CXX_${target}" = "${clangCl}/bin/clang-cl";
     "AR_${target}" = "${llvm.llvm}/bin/llvm-lib";
     "RC_${target}" = "${llvm.llvm}/bin/llvm-rc";
+    # SQLCipher links `crypto` from here (`bundled-sqlcipher` on Windows).
+    "${targetEnv}_OPENSSL_LIB_DIR" = "${openssl}/lib";
+    "${targetEnv}_OPENSSL_INCLUDE_DIR" = "${openssl}/include";
   };
 
   buildPhase = ''
@@ -99,5 +114,5 @@ pkgs.stdenv.mkDerivation {
     runHook postInstall
   '';
 
-  passthru = { inherit xwinSdk; };
+  passthru = { inherit xwinSdk openssl; };
 }

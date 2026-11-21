@@ -732,10 +732,14 @@ Where `crates/store` refines or departs from the sections above.
   for the professional panel and analytics read from `sync_row` later.
   `tests/e2e.rs` runs two devices against a throwaway cluster from the
   devshell (`initdb` / `pg_ctl`).
-- **Windows build gap.** `openssl-src` builds MSVC targets with `nmake`, so
-  the vendored OpenSSL behind SQLCipher cannot be cross-built from Linux;
-  the Windows target needs a prebuilt or separately built static libcrypto
-  (`OPENSSL_LIB_DIR` / `OPENSSL_INCLUDE_DIR` with `bundled-sqlcipher`).
+- **Windows build.** `openssl-src` builds MSVC targets with `nmake`, so
+  Windows uses `bundled-sqlcipher` against a static libcrypto from
+  `nix/openssl-msvc.nix`: OpenSSL's Unix makefile with a `mingw64`-derived
+  config, clang's GNU driver targeting the MSVC ABI against the xwin SDK,
+  `no-asm`, crypto only, archive installed as `crypto.lib`.
+  `nix/windows.nix` points `X86_64_PC_WINDOWS_MSVC_OPENSSL_{LIB,INCLUDE}_DIR`
+  at it and links ws2_32 / crypt32 / advapi32 / user32 / bcrypt. The exe
+  (static CRT) imports only system DLLs. Not yet run on a Windows machine.
 - **Exports, passphrases, logout.** `.myos` = the whole `user.db` copied by
   `sqlcipher_export` under a passphrase (SQLCipher KDF: PBKDF2-HMAC-SHA512,
   600 000 iterations, the file's own salt — replaces the Argon2id note in
